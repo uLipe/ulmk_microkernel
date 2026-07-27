@@ -62,6 +62,8 @@ void              ulmk_arch_secondary_init(void);
 void              ulmk_arch_secondary_mark_ready(void);
 void              ulmk_arch_start_secondary(uint32_t cpu_id, void (*entry)(void));
 void              ulmk_arch_smp_mark_ready(void);
+uint32_t          ulmk_arch_smp_ready_mask(void);
+void              ulmk_arch_smp_wait_ready(uint32_t mask);
 void              ulmk_arch_smp_park(void);
 
 void     ulmk_arch_cycle_enable(void);

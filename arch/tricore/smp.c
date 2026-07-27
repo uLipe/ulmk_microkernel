@@ -113,6 +113,16 @@ void ulmk_arch_smp_mark_ready(void)
 	g_smp_gate = SMP_GATE_READY;
 }
 
+uint32_t ulmk_arch_smp_ready_mask(void)
+{
+	return (g_smp_gate == SMP_GATE_READY) ? 0x1u : 0u;
+}
+
+void ulmk_arch_smp_wait_ready(uint32_t mask)
+{
+	(void)mask;
+}
+
 void ulmk_arch_send_ipi(uint32_t cpu_id)
 {
 	volatile uint32_t *src;
@@ -279,6 +289,8 @@ void ulmk_arch_smp_park(void)
 #else /* !ENABLE_SMP */
 
 void ulmk_arch_smp_mark_ready(void) {}
+uint32_t ulmk_arch_smp_ready_mask(void) { return 0u; }
+void ulmk_arch_smp_wait_ready(uint32_t mask) { (void)mask; }
 void ulmk_arch_send_ipi(uint32_t cpu_id) { (void)cpu_id; }
 void ulmk_arch_ipi_clear_self(void) {}
 void ulmk_arch_ipi_note_enter(void) {}
