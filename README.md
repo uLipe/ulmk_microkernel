@@ -119,14 +119,17 @@ The workspace is mounted at `/workspace` inside the container.
 
 ### Build the hello world demo (inside the container)
 
-All components are **OFF by default**. Enable the demo stack, build, and run:
+All components are **OFF by default**. Enable a demo, build, and run.
+`hello_world` is the only builtin component; `ping_pong` lives in the sibling
+`ulmk_apps/` repo (auto-discovered when present). Each has its own
+`ROOT_THREAD` — enable only one at a time.
 
 ```bash
 # 1. See what is available
 python3 tools/dev.py components list
 
-# 2. Enable hello_world (requires ping_pong — enable both)
-python3 tools/dev.py components enable hello_world ping_pong
+# 2. Enable hello_world (builtin)
+python3 tools/dev.py components enable hello_world
 
 # 3. Build
 python3 tools/dev.py build --board boards/qemu_riscv_virt
@@ -144,7 +147,10 @@ python3 tools/dev.py build --board boards/qemu_mps2_an505
 python3 tools/dev.py build --clean
 
 # One-shot enable without saving .ulmk/components.conf
-python3 tools/dev.py build --component hello_world --component ping_pong
+python3 tools/dev.py build --no-components --component hello_world
+
+# IPC demo from ulmk_apps (requires sibling checkout)
+python3 tools/dev.py build --no-components --component ping_pong
 
 # Kernel-only image (no components)
 python3 tools/dev.py build --no-components
@@ -161,13 +167,18 @@ python3 tools/dev.py build qemu --board boards/qemu_mps2_an500
 python3 tools/dev.py build qemu --board boards/qemu_mps2_an505
 ```
 
-Expected output (with demo components enabled):
+Expected output with `hello_world`:
 
 ```
 ulmk: kernel entry
 ...
 ulmk: switching to root thread
-ulmk: hello from userspace — tick #0
+ulmk: hello from userspace — hello world!
+```
+
+Expected output with `ping_pong`:
+
+```
 ping_pong: round 1
 ```
 
@@ -264,7 +275,7 @@ boards/qemu_riscv_virt/      RISC-V QEMU virt CI board
 boards/qemu_mps2_an500/      ARMv7-M Cortex-M7 QEMU CI board
 boards/qemu_mps2_an505/      ARMv8-M Cortex-M33 QEMU CI board
 components/hello_world/      reference ROOT_THREAD component (default OFF)
-components/ping_pong/        IPC ping/pong demo (default OFF)
+                             # ping_pong lives in sibling ../ulmk_apps/ping_pong/
 include/ulmk/microkernel.h     public API (all syscall wrappers)
 linker/                      arch-independent linker fragments
 stub/                        documentation-only stub templates

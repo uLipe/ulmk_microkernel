@@ -115,7 +115,7 @@ them explicitly:
 
 ```bash
 python3 tools/dev.py components list
-python3 tools/dev.py components enable hello_world ping_pong
+python3 tools/dev.py components enable hello_world
 python3 tools/dev.py build --board boards/qemu_riscv_virt
 python3 tools/dev.py build qemu --board boards/qemu_riscv_virt
 ```
@@ -123,7 +123,8 @@ python3 tools/dev.py build qemu --board boards/qemu_riscv_virt
 Selection is stored in `.ulmk/components.conf` (gitignored). One-shot overrides:
 
 ```bash
-python3 tools/dev.py build --component hello_world --component ping_pong
+python3 tools/dev.py build --no-components --component hello_world
+python3 tools/dev.py build --no-components --component ping_pong
 python3 tools/dev.py build --no-components   # kernel-only; uses root_thread stub
 ```
 
@@ -136,7 +137,6 @@ CMake receives `-DULMK_COMP_<name>_ENABLED=ON|OFF` for every discovered componen
 ulmk_component_register(
     NAME         hello_world
     ENABLED      OFF
-    REQUIRES     ping_pong
     SOURCES
         src/root_thread.c
         src/hello_world.c
@@ -167,9 +167,13 @@ For each scan root (1 and 2 above; the board dir is handled separately via `boar
 
 1. Enumerate immediate subdirectories (non-recursive at this level).
 2. If a subdirectory contains a `CMakeLists.txt`, call `add_subdirectory()` on it.
-3. `ulmk_component_register()` inside that `CMakeLists.txt` registers the component.
+3. That `CMakeLists.txt` either calls `ulmk_component_register()` once, **or**
+   acts as an aggregator that `add_subdirectory()`s child packages which each
+   register (e.g. `ulmk_apps/silicon/CMakeLists.txt` → `silicon_*`).
 4. `ENABLED OFF` → component known but contributes nothing.
 5. `ENABLED ON` → sources, include dirs, and optional linker fragment accumulated.
+
+Kernel/board scans stay shallow; nesting is an apps-package concern.
 
 ### Board directory
 
@@ -382,8 +386,8 @@ void my_service_entry(void *arg)
 
 **Location:** `components/hello_world/`
 
-**Purpose:** Reference `ROOT_THREAD` component. Starts board services, the hello
-counter task, and the `ping_pong` demo via `ping_pong_init()`.
+**Purpose:** Reference builtin `ROOT_THREAD` component. Starts board services
+and the hello task. Independent of `ping_pong` (which lives in `ulmk_apps`).
 
 ### CMakeLists.txt
 
@@ -391,7 +395,6 @@ counter task, and the `ping_pong` demo via `ping_pong_init()`.
 ulmk_component_register(
     NAME         hello_world
     ENABLED      OFF
-    REQUIRES     ping_pong
     SOURCES
         src/root_thread.c
         src/hello_world.c
@@ -400,14 +403,11 @@ ulmk_component_register(
 )
 ```
 
-Enabling `hello_world` without `ping_pong` fails at configure time.
-
 ### Sketches
 
 **root_thread.c:**
 ```c
 #include <hello_world.h>
-#include <ping_pong.h>
 #include <ulmk/microkernel.h>
 
 void board_services_init(const ulmk_boot_info_t *info);
@@ -416,7 +416,6 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 {
     board_services_init(info);
     hello_world_init(info);
-    ping_pong_init(info);
     ulmk_thread_exit();
 }
 ```
@@ -427,33 +426,11 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 #include <board_console.h>    /* board_console_puts(), board_console_putc() */
 #include <ulmk/microkernel.h>
 
-/*
- * Minimal decimal formatter — hello_world has no dependency on any kernel
- * or library service. All output goes through board_console's public C API.
- */
-static void print_uint32(uint32_t v)
-{
-    char buf[11];
-    int  i = sizeof(buf) - 1;
-
-    buf[i] = '\0';
-    do {
-        buf[--i] = '0' + (v % 10u);
-        v /= 10u;
-    } while (v && i > 0);
-    board_console_puts(&buf[i]);
-}
-
 static void hello_entry(void *arg)
 {
-    uint32_t n = 0;
-
-    for (;;) {
-        board_console_puts("hello ");
-        print_uint32(n++);
-        board_console_putc('\n');
-        board_timer_sleep_us(1000000u);  /* 1 s */
-    }
+    (void)arg;
+    board_console_puts("ulmk: hello from userspace — hello world!\n");
+    ulmk_thread_exit();
 }
 
 ulmk_tid_t hello_world_init(const ulmk_boot_info_t *info)
@@ -478,26 +455,27 @@ ulmk_tid_t hello_world_init(const ulmk_boot_info_t *info)
 
 ## 10. ping_pong Component Design
 
-**Location:** `components/ping_pong/`
+**Location:** `../ulmk_apps/ping_pong/` (sibling apps repo, not builtin)
 
-**Purpose:** Second built-in component. Exercises multi-component linking (separate
-`ulmk_comp_ping_pong.a` + MPU domain), synchronous IPC (`ep_call` / `ep_recv` /
-`ep_reply`), and board timer/console without board-specific headers.
-
-**Dependency:** `hello_world` declares `REQUIRES ping_pong` and calls
-`ping_pong_init()` from its root thread. Enable both for the demo image:
+**Purpose:** Standalone IPC demo. Exercises multi-component linking
+(`ulmk_comp_ping_pong.a` + MPU domain), synchronous IPC (`ep_call` /
+`ep_recv` / `ep_reply`), and board timer/console without board-specific
+headers. Has its own `ROOT_THREAD` — do not enable together with
+`hello_world`.
 
 ```bash
-python3 tools/dev.py components enable hello_world ping_pong
+python3 tools/dev.py build --no-components --component ping_pong
 ```
 
 ### File layout
 
 ```
-components/ping_pong/
+ulmk_apps/ping_pong/
 ├── CMakeLists.txt
 ├── include/ping_pong.h
-└── src/ping_pong.c
+└── src/
+    ├── root_thread.c
+    └── ping_pong.c
 ```
 
 ### CMakeLists.txt
@@ -506,13 +484,13 @@ components/ping_pong/
 ulmk_component_register(
     NAME         ping_pong
     ENABLED      OFF
-    SOURCES      src/ping_pong.c
+    SOURCES
+        src/root_thread.c
+        src/ping_pong.c
     INCLUDE_DIRS include
+    ROOT_THREAD
 )
 ```
-
-No `ROOT_THREAD`. Enabling `ping_pong` alone compiles the library but does not
-start the threads — only a component with `ROOT_THREAD` calls `ping_pong_init()`.
 
 ---
 

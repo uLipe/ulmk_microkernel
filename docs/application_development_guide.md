@@ -87,7 +87,7 @@ my_project/
 ```
 
 Place `ulmk_apps/` as a sibling of `ulmk/`.  The build
-auto-discovers it:
+auto-discovers it with a **shallow** scan of immediate children:
 
 ```cmake
 # From CMakeLists.txt — happens automatically
@@ -98,6 +98,19 @@ if(IS_DIRECTORY "${CMAKE_SOURCE_DIR}/../ulmk_apps")
     endforeach()
 endif()
 ```
+
+A child may be a single component **or** an aggregator package.  Example —
+silicon cert suite:
+
+```
+ulmk_apps/silicon/
+├── CMakeLists.txt          ← GLOB children + add_subdirectory
+├── silicon_baseline/
+├── silicon_e2e/
+└── …
+```
+
+Recursion is the aggregator's responsibility; the kernel scan stays shallow.
 
 ---
 

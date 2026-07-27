@@ -13,7 +13,7 @@
  * the board timer: with no OS-level mutex yet, only one thread may drive the
  * single board-timer server at a time, so the periodic behaviour lives in the
  * ping_pong demo where synchronous IPC serialises timer access (see
- * components/ping_pong/src/ping_pong.c).
+ * ulmk_apps/ping_pong/src/ping_pong.c).
  */
 
 #include <stdint.h>

@@ -16,15 +16,17 @@ Subcommands:
     tests integ         Arch whitebox only (e.g. ctx_early_tricore)
     killall             Stop all running dev containers
 
-Components default OFF in CMake manifests. Enable before building the demo:
+Components default OFF in CMake manifests. Enable before building a demo
+(hello_world is the only builtin; ping_pong lives in sibling ulmk_apps):
 
-    python3 tools/dev.py components enable hello_world ping_pong
+    python3 tools/dev.py components enable hello_world
     python3 tools/dev.py build --board boards/qemu_riscv_virt
     python3 tools/dev.py build qemu --board boards/qemu_riscv_virt
 
 One-shot build without saving config:
 
-    python3 tools/dev.py build --component hello_world --component ping_pong
+    python3 tools/dev.py build --no-components --component hello_world
+    python3 tools/dev.py build --no-components --component ping_pong
     python3 tools/dev.py build --no-components
 
 Options:
@@ -144,17 +146,28 @@ def _component_scan_dirs(board_host: Path | None = None) -> list[Path]:
     """Return directories that may contain ulmk_component_register()."""
     dirs: list[Path] = []
 
+    def _append_leaf_or_children(root: Path) -> None:
+        """If CMakeLists registers a component, append root; else scan children.
+
+        Supports aggregator packages (e.g. ulmk_apps/silicon/) whose top-level
+        CMakeLists only add_subdirectory()s leaf components.
+        """
+        cmake = root / "CMakeLists.txt"
+        if not cmake.is_file():
+            return
+        text = cmake.read_text()
+        if re.search(r"ulmk_component_register\s*\(", text):
+            dirs.append(root)
+            return
+        for sub in sorted(root.iterdir()):
+            if sub.is_dir() and (sub / "CMakeLists.txt").is_file():
+                dirs.append(sub)
+
     comp_root = WORKSPACE_ROOT / "components"
     if comp_root.is_dir():
         for entry in sorted(comp_root.iterdir()):
-            if not entry.is_dir():
-                continue
-            if entry.name == "drivers":
-                for sub in sorted(entry.iterdir()):
-                    if sub.is_dir() and (sub / "CMakeLists.txt").is_file():
-                        dirs.append(sub)
-            elif (entry / "CMakeLists.txt").is_file():
-                dirs.append(entry)
+            if entry.is_dir():
+                _append_leaf_or_children(entry)
 
     if board_host is not None:
         board_comps = board_host / "components"
@@ -166,8 +179,8 @@ def _component_scan_dirs(board_host: Path | None = None) -> list[Path]:
     apps_root = WORKSPACE_ROOT.parent / "ulmk_apps"
     if apps_root.is_dir():
         for entry in sorted(apps_root.iterdir()):
-            if entry.is_dir() and (entry / "CMakeLists.txt").is_file():
-                dirs.append(entry)
+            if entry.is_dir():
+                _append_leaf_or_children(entry)
 
     return dirs
 
@@ -925,11 +938,12 @@ examples:
   python3 tools/dev.py --rebuild
   python3 tools/dev.py components list
   python3 tools/dev.py components status
-  python3 tools/dev.py components enable hello_world ping_pong
-  python3 tools/dev.py components disable ping_pong
+  python3 tools/dev.py components enable hello_world
+  python3 tools/dev.py components disable hello_world
   python3 tools/dev.py build
   python3 tools/dev.py build --clean
-  python3 tools/dev.py build --component hello_world --component ping_pong
+  python3 tools/dev.py build --no-components --component hello_world
+  python3 tools/dev.py build --no-components --component ping_pong
   python3 tools/dev.py build --no-components
   python3 tools/dev.py build qemu
   python3 tools/dev.py build --board boards/qemu_riscv_virt

@@ -130,7 +130,7 @@ ulmk/
 │       ├── linker.h                      ← ULMK_DOMAIN_BSS, ULMK_PRIVATE, ULMK_DEFINE_DOMAIN
 │       ├── syscall_nr.h                  ← syscall number table
 │       └── syscall_abi.h                 ← ULMK_SYSCALL_N macros
-├── components/                           ← built-in components (hello_world, …)
+├── components/                           ← built-in components (hello_world only)
 │   └── hello_world/
 │       ├── CMakeLists.txt
 │       ├── include/hello_world.h
@@ -158,6 +158,9 @@ External layout:
 ```
 ulmk/            ← kernel repo (this)
 ../ulmk_apps/                ← optional sibling; auto-discovered if present
+    ping_pong/               ← standalone IPC demo (ROOT_THREAD)
+    silicon/                 ← aggregator CMakeLists → silicon_* certs
+    freertos/                ← FreeRTOS shim
 
 <anywhere>/my_board/         ← real board chip input (external)
     memory.ld                ← MEMORY block with real HW addresses
@@ -177,8 +180,9 @@ The top-level `CMakeLists.txt` scans three locations at configure time:
 3. `../ulmk_apps/` — optional external components sibling (board-agnostic apps).
 
 For each directory found, if it contains a `CMakeLists.txt`, it is added via
-`add_subdirectory()`.  That `CMakeLists.txt` must call `ulmk_component_register()`
-exactly once.
+`add_subdirectory()`.  That `CMakeLists.txt` may call `ulmk_component_register()`
+once, or may itself `add_subdirectory()` child packages that each register
+(aggregator pattern used by `ulmk_apps/silicon/`).
 
 ```cmake
 # From CMakeLists.txt — simplified
@@ -188,7 +192,8 @@ foreach(_dir IN LISTS _dirs)
         add_subdirectory("${_dir}" ...)
     endif()
 endforeach()
-# Same pattern for ${ULMK_CHIP_DIR}/components/ and ../ulmk_apps/
+# Same shallow pattern for ${ULMK_CHIP_DIR}/components/ and ../ulmk_apps/
+# Nesting (e.g. silicon/*) is handled by the package's own CMakeLists.txt.
 ```
 
 ### 4.2 Discovery log
@@ -198,14 +203,13 @@ With all components OFF by default:
 ```
 --   [component] hello_world DISABLED
 --   [component] ping_pong DISABLED
---   [component] tricore_asclin DISABLED
+--   [component] silicon_baseline DISABLED
 ```
 
-After `dev.py build --component hello_world --component ping_pong`:
+After `dev.py build --no-components --component hello_world`:
 
 ```
 --   [component] hello_world ENABLED
---   [component] ping_pong ENABLED
 --   [component] ROOT_THREAD: hello_world
 ```
 

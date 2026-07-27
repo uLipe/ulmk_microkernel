@@ -87,11 +87,9 @@ jobs:
           docker pull "$IMG"
           docker tag  "$IMG" ulipe-microkernel:dev
 
-      - name: Build kernel (hello_world + ping_pong)
+      - name: Build kernel (hello_world)
         run: |
-          python3 tools/dev.py build \
-            --component hello_world \
-            --component ping_pong
+          python3 tools/dev.py build --no-components --component hello_world
 
   # ── Unit tests (host-compiled with Unity, no QEMU needed) ─────────────────
   unit-tests:
@@ -194,8 +192,7 @@ jobs:
       - name: Build kernel (qemu_riscv_virt)
         run: |
           python3 tools/dev.py build --board boards/qemu_riscv_virt \
-            --component hello_world \
-            --component ping_pong
+            --no-components --component hello_world
 
   # ── RISC-V: SDK suite ─────────────────────────────────────────────────────
   integ-tests-riscv:
@@ -348,8 +345,7 @@ jobs:
       - name: Build kernel (${{ matrix.board }})
         run: |
           python3 tools/dev.py build --board boards/${{ matrix.board }} \
-            --component hello_world \
-            --component ping_pong
+            --no-components --component hello_world
 
   # ── ARM Cortex-M: SDK suite ───────────────────────────────────────────────
   integ-tests-arm:
