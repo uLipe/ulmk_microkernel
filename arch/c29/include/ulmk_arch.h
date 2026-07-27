@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * Architecture abstraction layer — ARM Cortex-M (ARMv7-M / ARMv8-M)
- * Contract: docs/arch_api_spec.md
+ * Architecture abstraction layer — TI C29x / F29H85x
+ * Contract: docs/arch_api_spec.md + docs/c29f_port_plan.md
  */
 
 #ifndef ULMK_ARCH_H
@@ -13,34 +13,17 @@
 #include <ulmk/microkernel.h>
 #include <arch_config.h>
 
-/*
- * Thread context handle.
- *
- * Syscall/IRQ handlers defer the context switch to trap/ISR exit
- * (ulmk_kern_sched_dispatch).  Suspension therefore happens on the per-thread
- * kernel stack while still inside the arch trap prologue — MSP == that
- * thread's ksp.  ulmk_arch_ctx_switch swaps MSP the same way the RISC-V port
- * swaps its single SP.
- *
- * Fields (offsets mirrored by .equ in ctx_switch.S — keep in sync):
- *   ksp         saved kernel SP (MSP) of a suspended coroutine
- *   kstack_top  top of this thread's private kernel stack (fresh launch)
- *   user_sp     top of this thread's user stack (thread-mode PSP)
- *   entry, arg  first-run entry point and argument
- *   control     CONTROL value for this thread (nPRIV | SPSEL)
- *   fresh       1 until the thread has run for the first time
- */
 typedef struct {
-	uint32_t ksp;
-	uint32_t kstack_top;
-	uint32_t user_sp;
-	uint32_t entry;
-	uint32_t arg;
-	uint32_t control;
-	uint32_t fresh;
+	uint32_t sp;	/* A15 of the suspended thread frame */
 } ulmk_arch_ctx_t;
 
 typedef uint32_t ulmk_arch_irq_key_t;
+
+typedef struct {
+	volatile uint32_t locked;
+} ulmk_spinlock_t;
+
+#define ULMK_SPINLOCK_INIT	{ 0u }
 
 typedef struct {
 	uintptr_t base;
@@ -55,12 +38,6 @@ typedef struct {
 #define ULMK_REGION_HEAP	3
 #define ULMK_REGION_PERIPH	4
 #define ULMK_REGION_SHARED	5
-
-typedef struct {
-	volatile uint32_t locked;
-} ulmk_spinlock_t;
-
-#define ULMK_SPINLOCK_INIT	{ 0u }
 
 ulmk_arch_irq_key_t ulmk_arch_cpu_irq_save(void);
 void              ulmk_arch_cpu_irq_restore(ulmk_arch_irq_key_t key);
@@ -85,17 +62,10 @@ void              ulmk_arch_secondary_init(void);
 void              ulmk_arch_secondary_mark_ready(void);
 void              ulmk_arch_start_secondary(uint32_t cpu_id, void (*entry)(void));
 void              ulmk_arch_smp_mark_ready(void);
-uint32_t          ulmk_arch_smp_ready_mask(void);
-void              ulmk_arch_smp_wait_ready(uint32_t mask);
 void              ulmk_arch_smp_park(void);
 
 void     ulmk_arch_cycle_enable(void);
 uint32_t ulmk_arch_cycle_read(void);
-
-/* Periodic kernel tick (SysTick).  Called by kernel only. */
-void ulmk_arch_tick_init(uint32_t tick_hz);
-void ulmk_arch_tick_ack(void);
-uint32_t ulmk_arch_timer_wheel_cpu(void);
 
 void ulmk_arch_csa_pool_init(uintptr_t pool_base, size_t pool_size);
 
@@ -121,6 +91,10 @@ void ulmk_arch_mpu_configure(uint8_t prs, const ulmk_arch_region_t *regions,
 void ulmk_arch_mpu_switch(const ulmk_arch_region_t *regions, uint8_t count,
 			uint8_t prs);
 bool ulmk_arch_mpu_addr_permitted(uintptr_t addr, size_t size, uint32_t perms);
+bool ulmk_arch_ssu_is_enforcing(void);
+uint32_t ulmk_arch_ssu_mode(void);
+uint32_t ulmk_arch_smp_ready_mask(void);
+void ulmk_arch_smp_wait_ready(uint32_t mask);
 
 void ulmk_arch_irq_vectors_init(uintptr_t btv, uintptr_t biv, uintptr_t isp_top);
 void ulmk_arch_irq_src_configure(uint8_t srpn, uint8_t priority, uint8_t cpu_id);
@@ -139,23 +113,15 @@ uint32_t ulmk_arch_atomic_cas(volatile uint32_t *ptr,
 			    uint32_t expected, uint32_t desired);
 uint32_t ulmk_arch_atomic_add(volatile uint32_t *ptr, uint32_t val);
 
-/*
- * ulmk_kern_start - common C runtime bring-up (kernel/init/init.c); no return.
- * Entered from startup.S after the CPU prologue (stack) with interrupts off;
- * relocates .data, clears BSS, then calls board_init/arch_init/kern_main.
- */
 void ulmk_kern_start(void);
-
-/*
- * Board-level hardware setup, called by ulmk_kern_start() before the .data
- * copy.  A definition must always be linked (board board_services.c or
- * stub/board_init_stub.c).  Not weak: under SDK static-library packaging a
- * weak reference fails to pull the board definition from the archive and
- * silently resolves to address 0, crashing at boot.
- */
 void ulmk_board_init(void);
-
 void ulmk_arch_init(ulmk_boot_info_t *info);
+
+void ulmk_arch_tick_init(uint32_t tick_hz);
+void ulmk_arch_tick_ack(void);
+uint32_t ulmk_arch_timer_wheel_cpu(void);
+
+void ulmk_arch_idle_entry(void *arg);
 
 void ulmk_arch_syscall_entry(void);
 void ulmk_arch_trap_entry(uint8_t trap_class, uint8_t tin);
@@ -166,6 +132,9 @@ void ulmk_printk_char_out(char c);
 void ulmk_kern_irq_dispatch(uint8_t srpn);
 void ulmk_kern_ipi_resched(void);
 void ulmk_kern_timer_tick(void);
+#if ULMK_CONFIG_ENABLE_SMP
+void ulmk_kern_ipi_from_isr(void);
+#endif
 void ulmk_kern_sched_dispatch(bool from_isr);
 void ulmk_kern_secondary_main(void);
 uint32_t ulmk_kern_syscall_ret_resolve(uint32_t ret);

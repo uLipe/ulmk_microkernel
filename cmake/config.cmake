@@ -20,4 +20,13 @@ if("${ULMK_CONFIG_ENABLE_SMP}" STREQUAL "1")
 		message(FATAL_ERROR
 			"ULMK_CONFIG_ENABLE_SMP=1 is not supported on ARM Cortex-M")
 	endif()
+	if("${ULMK_ARCH}" STREQUAL "c29")
+		if(NOT DEFINED ULMK_BOARD_C29_DLB_WORKAROUND OR
+				NOT "${ULMK_BOARD_C29_DLB_WORKAROUND}" STREQUAL "1")
+			message(FATAL_ERROR
+				"ULMK_CONFIG_ENABLE_SMP=1 on C29 requires board to declare "
+				"ULMK_BOARD_C29_DLB_WORKAROUND=1 in board.cmake "
+				"(errata SPRZ569E: shared-RAM stale reads under SMP)")
+		endif()
+	endif()
 endif()

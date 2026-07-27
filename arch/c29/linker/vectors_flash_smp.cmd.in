@@ -1,0 +1,21 @@
+/* arch/c29/linker/vectors_flash_smp.cmd.in — secondary stubs, FLASH+SMP.
+ *
+ * Appended at the end of SECTIONS (after .text/.data) so stubs sit past the
+ * signed CPU1 image.  package-seccfg keeps them out of the cert BIN and
+ * programs them only when ULMK_C29_FLASH_SECONDARY=1.  Layout matches
+ * release RAM: +0 codestart, +0x40 nmivector, 0x80 bytes total.
+ */
+
+    .cpu2_stub : {
+        *(.cpu2_codestart)
+        . = 0x40;
+        *(.cpu2_nmivector)
+        . = 0x80;
+    } > KERNEL_FLASH, palign(8)
+
+    .cpu3_stub : {
+        *(.cpu3_codestart)
+        . = 0x40;
+        *(.cpu3_nmivector)
+        . = 0x80;
+    } > KERNEL_FLASH, palign(8)

@@ -1,0 +1,29 @@
+/* arch/c29/linker/prologue.cmd.in
+ * Layer 2 — arch-owned, C29-specific.
+ */
+
+--entry_point=code_start
+
+--retain="*(codestart)"
+--retain="*(cert)"
+--retain="*(resetvector)"
+--retain="*(.cpu2_codestart)"
+--retain="*(.cpu2_nmivector)"
+--retain="*(.cpu3_codestart)"
+--retain="*(.cpu3_nmivector)"
+--retain="*(.TI.bound:CPU1_Cfg)"
+--retain="*(.TI.bound:CPU2_Cfg)"
+--retain="*(.TI.bound:CPU3_Cfg)"
+--retain="*(.TI.bound:CPU4_Cfg)"
+--retain="*(.text.ulmk_c29_int_veneer)"
+--retain="*(.text.ulmk_c29_tick_isr)"
+--retain="*(.text.ulmk_c29_syscall_isr)"
+--retain="*(.text.ulmk_c29_yield_isr)"
+--retain="*(.text.ulmk_c29_ipi1_isr)"
+--retain="*(.text.ulmk_c29_ipi2_isr)"
+--retain="*(.text.ulmk_arch_nmi_handler)"
+--retain="*(.text.ulmk_arch_fault_handler)"
+--retain="*(.text.ulmk_arch_idle_entry)"
+--retain="*(.text.ulmk_c29_thread_trampoline)"
+--retain="*(.text.ulmk_c29_cpu2_start)"
+--retain="*(.text.ulmk_c29_cpu3_start)"

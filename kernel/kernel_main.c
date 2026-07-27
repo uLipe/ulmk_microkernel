@@ -201,6 +201,13 @@ void ulmk_kern_trap_panic(void)
  * Thread entries
  * ========================================================================= */
 
+#ifndef ULMK_ARCH_IDLE_ENTRY
+#define ULMK_ARCH_IDLE_ENTRY	idle_thread_entry
+#endif
+#ifndef ULMK_ARCH_IDLE_PRIVILEGE
+#define ULMK_ARCH_IDLE_PRIVILEGE	ULMK_PRIV_KERNEL
+#endif
+
 static void idle_thread_entry(void *arg)
 {
 	(void)arg;
@@ -319,11 +326,11 @@ void ulmk_kern_main(const ulmk_boot_info_t *info)
 	 */
 	for (cpu = 0u; cpu < (uint32_t)ULMK_NR_CPUS; cpu++) {
 		attr.name       = "idle";
-		attr.entry      = idle_thread_entry;
+		attr.entry      = ULMK_ARCH_IDLE_ENTRY;
 		attr.arg        = NULL;
 		attr.priority   = 255u;
 		attr.stack_size = ULMK_IDLE_STACK_SIZE;
-		attr.privilege  = ULMK_PRIV_KERNEL;
+		attr.privilege  = ULMK_ARCH_IDLE_PRIVILEGE;
 		attr.cpu        = (uint8_t)cpu;
 		ulmk_thread_init(&idle_thread_g[cpu], &attr, idle_stack_g[cpu]);
 		ulmk_percpu_of(cpu)->idle = &idle_thread_g[cpu];
@@ -354,18 +361,45 @@ void ulmk_kern_main(const ulmk_boot_info_t *info)
 	}
 #endif
 
-	ulmk_arch_mpu_enable();
-	UL_LOG_DBG("mpu enabled");
-
-
 	ulmk_arch_smp_mark_ready();
 
 #if ULMK_CONFIG_ENABLE_SMP
+	/*
+	 * Bring up secondaries before MPU enforce so arch boot stubs can
+	 * still write the ready handshake under a permissive protection
+	 * window.
+	 */
 	for (cpu = 1u; cpu < (uint32_t)ULMK_NR_CPUS; cpu++) {
 		ulmk_printk("ulmk: starting CPU%u\n", (unsigned)cpu);
 		ulmk_arch_start_secondary(cpu, ulmk_kern_secondary_main);
 	}
+	{
+		uint32_t want = (1u << ULMK_NR_CPUS) - 1u;
+
+		ulmk_arch_smp_wait_ready(want);
+		ulmk_printk("ulmk: smp ready mask=0x%x\n",
+			    (unsigned)ulmk_arch_smp_ready_mask());
+		{
+			extern volatile uint32_t g_c29_smp_diag[6]
+				__attribute__((weak));
+
+			if (&g_c29_smp_diag[0] != NULL &&
+			    g_c29_smp_diag[0] != 0u) {
+				ulmk_printk(
+					"ulmk: c29 smp diag cpu=%u rststat=0x%x rstctrl=0x%x vect=0x%x mem=0x%x ready=0x%x\n",
+					(unsigned)g_c29_smp_diag[0],
+					(unsigned)g_c29_smp_diag[1],
+					(unsigned)g_c29_smp_diag[2],
+					(unsigned)g_c29_smp_diag[3],
+					(unsigned)g_c29_smp_diag[4],
+					(unsigned)g_c29_smp_diag[5]);
+			}
+		}
+	}
 #endif
+
+	ulmk_arch_mpu_enable();
+	UL_LOG_DBG("mpu enabled");
 
 	ulmk_printk("ulmk: switching to root thread\n");
 

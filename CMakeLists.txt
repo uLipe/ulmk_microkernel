@@ -71,6 +71,16 @@ endif()
 
 find_program(ULMK_PYTHON NAMES python3 python REQUIRED)
 
+# Flash profile must be visible to C too: the arch picks secondary reset
+# vectors (RAM banks vs flash banks) from it, not only the linker script.
+# Declare as CACHE BOOL so -DULMK_C29_FLASH=1 is not left UNINITIALIZED
+# (which silently broke if() / add_compile_definitions for board_init).
+set(ULMK_C29_FLASH OFF CACHE BOOL "C29 flash profile (XIP + POR cert)")
+if(ULMK_C29_FLASH)
+	add_compile_definitions(ULMK_C29_FLASH=1)
+	message(STATUS "ULMK_C29_FLASH=1 (flash profile compile defs)")
+endif()
+
 execute_process(
     COMMAND "${ULMK_PYTHON}" "${CMAKE_SOURCE_DIR}/tools/gen_config.py"
         --out-dir "${CMAKE_BINARY_DIR}/generated"
@@ -115,8 +125,15 @@ add_library(ulmk_kernel STATIC
     kernel/syscall/syscall_wcet.c
     ${ULMK_ARCH_KERNEL_SOURCES})
 
+if(ULMK_C29_FLASH)
+	target_compile_definitions(ulmk_kernel PRIVATE ULMK_C29_FLASH=1)
+endif()
+
 if(EXISTS "${ULMK_CHIP_DIR}/qemu_printk_hook.c")
     target_sources(ulmk_kernel PRIVATE "${ULMK_CHIP_DIR}/qemu_printk_hook.c")
+endif()
+if(EXISTS "${ULMK_CHIP_DIR}/printk_hook.c")
+    target_sources(ulmk_kernel PRIVATE "${ULMK_CHIP_DIR}/printk_hook.c")
 endif()
 
 target_include_directories(ulmk_kernel PUBLIC
@@ -130,14 +147,17 @@ target_include_directories(ulmk_kernel PRIVATE
 
 target_compile_definitions(ulmk_kernel PRIVATE ULMK_KERNEL_BUILD=1)
 
-target_compile_options(ulmk_kernel PRIVATE
-	-fno-data-sections
-	${ULMK_KERNEL_OPT_FLAGS})
+if(NOT "${ULMK_COMPILER_FAMILY}" STREQUAL "ticlang")
+    target_compile_options(ulmk_kernel PRIVATE -fno-data-sections)
+endif()
+target_compile_options(ulmk_kernel PRIVATE ${ULMK_KERNEL_OPT_FLAGS})
 
 # init.c runs before .data/.bss are initialised — keep GCC from lowering its
-# copy/zero loops into memcpy/memset calls.
-set_source_files_properties(kernel/init/init.c PROPERTIES
-    COMPILE_OPTIONS "-fno-tree-loop-distribute-patterns")
+# copy/zero loops into memcpy/memset calls.  TIClang does not support this flag.
+if(NOT "${ULMK_COMPILER_FAMILY}" STREQUAL "ticlang")
+    set_source_files_properties(kernel/init/init.c PROPERTIES
+        COMPILE_OPTIONS "-fno-tree-loop-distribute-patterns")
+endif()
 
 if(DEFINED ULMK_BOARD_CFLAGS)
     target_compile_options(ulmk_kernel PRIVATE ${ULMK_BOARD_CFLAGS})
@@ -215,7 +235,9 @@ if(ULMK_SDK)
         "${ULMK_CHIP_DIR}"
         ${ULMK_BOARD_INCLUDES})
 
-    target_compile_options(ulmk_board PRIVATE -fno-data-sections)
+    if(NOT "${ULMK_COMPILER_FAMILY}" STREQUAL "ticlang")
+        target_compile_options(ulmk_board PRIVATE -fno-data-sections)
+    endif()
 
     if(DEFINED ULMK_BOARD_CFLAGS)
         target_compile_options(ulmk_board PRIVATE ${ULMK_BOARD_CFLAGS})
@@ -240,16 +262,22 @@ if(ULMK_SDK)
         "${ULMK_CHIP_DIR}"
         ${ULMK_BOARD_INCLUDES})
 
-    target_compile_options(ulmk PRIVATE -fno-data-sections)
+    if(NOT "${ULMK_COMPILER_FAMILY}" STREQUAL "ticlang")
+        target_compile_options(ulmk PRIVATE -fno-data-sections)
+    endif()
 
     if(DEFINED ULMK_BOARD_CFLAGS)
         target_compile_options(ulmk PRIVATE ${ULMK_BOARD_CFLAGS})
     endif()
 
-    # kernel and board reference each other's symbols — group to resolve the
-    # circular dependency between the two archives.
-    target_link_libraries(ulmk PRIVATE
-        -Wl,--start-group ulmk_board ulmk_kernel -Wl,--end-group)
+    if("${ULMK_COMPILER_FAMILY}" STREQUAL "ticlang")
+        target_link_libraries(ulmk PRIVATE ulmk_board ulmk_kernel)
+    else()
+        # kernel and board reference each other's symbols — group to resolve the
+        # circular dependency between the two archives.
+        target_link_libraries(ulmk PRIVATE
+            -Wl,--start-group ulmk_board ulmk_kernel -Wl,--end-group)
+    endif()
 
     _ulmk_finalize_build(ulmk "${ULMK_CHIP_DIR}")
 else()
@@ -274,7 +302,13 @@ else()
         "${ULMK_CHIP_DIR}"
         ${ULMK_BOARD_INCLUDES})
 
-    target_compile_options(ulmk PRIVATE -fno-data-sections)
+    if(ULMK_C29_FLASH)
+	target_compile_definitions(ulmk PRIVATE ULMK_C29_FLASH=1)
+    endif()
+
+    if(NOT "${ULMK_COMPILER_FAMILY}" STREQUAL "ticlang")
+        target_compile_options(ulmk PRIVATE -fno-data-sections)
+    endif()
 
     if(DEFINED ULMK_BOARD_CFLAGS)
         target_compile_options(ulmk PRIVATE ${ULMK_BOARD_CFLAGS})

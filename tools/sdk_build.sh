@@ -62,7 +62,22 @@ WORKSPACE="$(cd "$(dirname "$0")/.." && pwd)"
 
 export PATH="/opt/qemu-tricore/bin:/opt/tricore-gcc-bin:/opt/riscv-gcc-bin:/opt/arm-gcc-bin:${PATH}"
 
-TAG="${ARCH}_${BOARD_NAME}_gcc"
+if [ "$ARCH" = "c29" ]; then
+	# Discover TI C29 toolchain when mounted at /ti (see tools/dev.py _ti_mount).
+	_TI_CGT=$(ls -d /ti/ccs*/ccs/tools/compiler/ti-cgt-c29* 2>/dev/null \
+		|| ls -d /ti/tools/compiler/ti-cgt-c29* 2>/dev/null | head -1 || true)
+	if [ -n "$_TI_CGT" ]; then
+		export PATH="$_TI_CGT/bin:${PATH}"
+	fi
+fi
+
+if [ "$ARCH" = "c29" ]; then
+	COMPILER_TAG="ticlang"
+else
+	COMPILER_TAG="gcc"
+fi
+
+TAG="${ARCH}_${BOARD_NAME}_${COMPILER_TAG}"
 if [ "$ENABLE_SMP" -eq 1 ]; then
 	TAG="${TAG}_smp"
 fi
@@ -71,7 +86,12 @@ if [ "$ENABLE_IRQ_ATTACH" -eq 1 ]; then
 fi
 KERNEL_A="ulmk_kernel_${TAG}.a"
 BOARD_A="ulmk_board_${TAG}.a"
-LD="linker_${TAG}.ld"
+# TI C29 uses .cmd; GNU arches use .ld.
+if [ "$ARCH" = "c29" ]; then
+	LD="linker_${TAG}.cmd"
+else
+	LD="linker_${TAG}.ld"
+fi
 
 if [ "$CLEAN" -eq 1 ]; then
 	echo "--- clean ---"
@@ -114,8 +134,14 @@ cp "$BUILD_DIR/libulmk_board.a"  "$OUT_DIR/lib/$BOARD_A"
 
 # The processed linker script selects kernel sections by archive name;
 # rewrite it to match the shipped archive filename.
-sed "s/libulmk_kernel\.a/$KERNEL_A/g" \
-	"$BUILD_DIR/generated/ulmk.ld" > "$OUT_DIR/linker/$LD"
+if [ "$ARCH" = "c29" ]; then
+	# TI .cmd: archive references use <libulmk_kernel.a>(...) syntax.
+	sed "s/<libulmk_kernel\.a>/<${KERNEL_A}>/g" \
+		"$BUILD_DIR/generated/ulmk.ld" > "$OUT_DIR/linker/$LD"
+else
+	sed "s/libulmk_kernel\.a/$KERNEL_A/g" \
+		"$BUILD_DIR/generated/ulmk.ld" > "$OUT_DIR/linker/$LD"
+fi
 
 # Public microkernel API headers.
 cp "$WORKSPACE"/include/ulmk/*.h "$OUT_DIR/include/ulmk/"
@@ -132,10 +158,15 @@ for h in "$CHIP_DIR"/*.h; do
 done
 
 echo "--- verify SDK ---"
-ar t "$OUT_DIR/lib/$KERNEL_A" >/dev/null
-ar t "$OUT_DIR/lib/$BOARD_A" >/dev/null
-grep -q "$KERNEL_A" "$OUT_DIR/linker/$LD"
-! grep -q "libulmk_kernel\.a" "$OUT_DIR/linker/$LD"
+if [ "$ARCH" = "c29" ]; then
+	c29ar t "$OUT_DIR/lib/$KERNEL_A" >/dev/null
+	c29ar t "$OUT_DIR/lib/$BOARD_A" >/dev/null
+else
+	ar t "$OUT_DIR/lib/$KERNEL_A" >/dev/null
+	ar t "$OUT_DIR/lib/$BOARD_A" >/dev/null
+	grep -q "$KERNEL_A" "$OUT_DIR/linker/$LD"
+	! grep -q "libulmk_kernel\.a" "$OUT_DIR/linker/$LD"
+fi
 test -f "$OUT_DIR/include/ulmk/microkernel.h"
 test -f "$OUT_DIR/include/ulmk_syscall_abi.h"
 

@@ -47,6 +47,17 @@ void ulmk_arch_smp_mark_ready(void)
 	g_smp_gate = SMP_GATE_READY;
 }
 
+uint32_t ulmk_arch_smp_ready_mask(void)
+{
+	/* RISC-V secondary mark uses online bits in percpu; expose gate only. */
+	return (g_smp_gate == SMP_GATE_READY) ? 0x1u : 0u;
+}
+
+void ulmk_arch_smp_wait_ready(uint32_t mask)
+{
+	(void)mask;
+}
+
 uint32_t ulmk_arch_cpu_id(void)
 {
 	uint32_t id;

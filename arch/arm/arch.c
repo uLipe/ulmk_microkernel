@@ -596,3 +596,13 @@ void ulmk_arch_smp_park(void)
 void ulmk_arch_smp_mark_ready(void)
 {
 }
+
+uint32_t ulmk_arch_smp_ready_mask(void)
+{
+	return 0u;
+}
+
+void ulmk_arch_smp_wait_ready(uint32_t mask)
+{
+	(void)mask;
+}

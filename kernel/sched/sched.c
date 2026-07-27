@@ -98,7 +98,13 @@ static void sched_switch_to(ulmk_thread_t *prev, ulmk_thread_t *next)
 
 	pc->current = next;
 	next->state = UL_THREAD_STATE_RUNNING;
-	ulmk_arch_ctx_switch(from, to);
+	/*
+	 * Always go through arch_sched_switch so arches that share INT with
+	 * syscall (C29) can defer the handoff to RETI.INT.  A direct
+	 * ctx_switch from inside INT abandons the veneer and leaves the
+	 * controller active — further ticks never arrive.
+	 */
+	ulmk_arch_sched_switch(from, to, ULMK_SCHED_SWITCH_COOP);
 }
 
 void ulmk_sched_set_dead_for_cleanup(ulmk_thread_t *th)

@@ -142,7 +142,11 @@ int ulmk_thread_init(ulmk_thread_t *th, const ulmk_thread_attr_t *attr, void *st
 		ulmk_arch_ctx_init(&th->ctx,
 				   attr->entry,
 				   attr->arg,
+#if defined(ULMK_ARCH_STACK_GROWS_UP) && ULMK_ARCH_STACK_GROWS_UP
+				   (uintptr_t)stack,
+#else
 				   (uintptr_t)stack + attr->stack_size,
+#endif
 				   attr->privilege);
 		th->ctx_ready = 1u;
 	}
@@ -150,7 +154,11 @@ int ulmk_thread_init(ulmk_thread_t *th, const ulmk_thread_attr_t *attr, void *st
 	ulmk_arch_ctx_init(&th->ctx,
 			 attr->entry,
 			 attr->arg,
+#if defined(ULMK_ARCH_STACK_GROWS_UP) && ULMK_ARCH_STACK_GROWS_UP
+			 (uintptr_t)stack,
+#else
 			 (uintptr_t)stack + attr->stack_size,
+#endif
 			 attr->privilege);
 #endif
 
@@ -172,7 +180,11 @@ void ulmk_thread_ensure_ctx(ulmk_thread_t *th)
 	ulmk_arch_ctx_init(&th->ctx,
 			   th->start_entry,
 			   th->start_arg,
+#if defined(ULMK_ARCH_STACK_GROWS_UP) && ULMK_ARCH_STACK_GROWS_UP
+			   (uintptr_t)th->stack_base,
+#else
 			   (uintptr_t)th->stack_base + th->stack_size,
+#endif
 			   th->privilege);
 	th->ctx_ready = 1u;
 }

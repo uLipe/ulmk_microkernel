@@ -84,6 +84,25 @@ function(_ulmk_finalize_build kernel_target chip_dir)
         list(APPEND domain_args "--domain" "${dname}:${dregion}")
     endforeach()
 
+    if("${ULMK_LINKER_DIALECT}" STREQUAL "ti-c29")
+        set(_ld_dialect_args "--dialect" "ti-c29")
+        if(ULMK_C29_FLASH)
+            list(APPEND _ld_dialect_args "--profile" "flash")
+            if("${ULMK_CONFIG_ENABLE_SMP}" STREQUAL "1")
+                list(APPEND _ld_dialect_args "--smp")
+            endif()
+            set(_ld_memory_dep "${chip_dir}/memory_flash.cmd")
+        # memory.cmd is the TI board input; fall back to memory.ld if absent.
+        elseif(EXISTS "${chip_dir}/memory.cmd")
+            set(_ld_memory_dep "${chip_dir}/memory.cmd")
+        else()
+            set(_ld_memory_dep "${chip_dir}/memory.ld")
+        endif()
+    else()
+        set(_ld_dialect_args "")
+        set(_ld_memory_dep "${chip_dir}/memory.ld")
+    endif()
+
     add_custom_command(
         OUTPUT  "${generated_ld}"
         COMMAND "${Python3_EXECUTABLE}"
@@ -93,21 +112,39 @@ function(_ulmk_finalize_build kernel_target chip_dir)
                 "--kernel-dir" "${CMAKE_SOURCE_DIR}/linker/kernel"
                 "--snippets"   "${CMAKE_SOURCE_DIR}/linker/snippets"
                 "--output"     "${generated_ld}"
+                ${_ld_dialect_args}
                 ${app_args}
                 ${comp_args}
                 ${domain_args}
         DEPENDS
-            "${chip_dir}/memory.ld"
+            "${_ld_memory_dep}"
             COMMENT "Generating linker script ${generated_ld}"
     )
 
     add_custom_target(ulmk_linker_script DEPENDS "${generated_ld}")
 
-    target_link_options("${kernel_target}" PRIVATE
-        "-T${generated_ld}"
-        "-nostartfiles"
-        "-Wl,--gc-sections"
-        "-Wl,-Map=${CMAKE_BINARY_DIR}/ulmk.map")
+    if("${ULMK_LINKER_DIALECT}" STREQUAL "ti-c29")
+        # Freestanding: no TI ROM autoinit / RTS.  Pull only compiler-rt
+        # builtins (e.g. __udivsi3) from the CGT package.
+        set(_c29_builtins
+            "${TI_C29_CGT_ROOT}/lib/c29.c0-ti-none-eabi/libclang_rt.builtins.a")
+        if(NOT EXISTS "${_c29_builtins}")
+            set(_c29_builtins
+                "${TI_C29_CGT_ROOT}/lib/libclang_rt.builtins.a")
+        endif()
+        target_link_options("${kernel_target}" PRIVATE
+            "LINKER:--map_file=${CMAKE_BINARY_DIR}/ulmk.map"
+            "LINKER:--reread_libs"
+            "LINKER:--disable_auto_rts"
+            "${generated_ld}"
+            "${_c29_builtins}")
+    else()
+        target_link_options("${kernel_target}" PRIVATE
+            "-T${generated_ld}"
+            "-nostartfiles"
+            "-Wl,--gc-sections"
+            "-Wl,-Map=${CMAKE_BINARY_DIR}/ulmk.map")
+    endif()
 
     add_dependencies("${kernel_target}" ulmk_linker_script)
 
