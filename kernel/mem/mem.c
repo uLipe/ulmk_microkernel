@@ -116,6 +116,25 @@ uint32_t ulmk_kern_mem_map(uint32_t hint, uint32_t size,
 		return (uint32_t)base;
 	}
 
+	if (flags & ULMK_MMAP_SHARED) {
+		/*
+		 * Shared physical window (external SDRAM, framebuffer, …).
+		 * Same hint contract as PERIPH, but Normal non-cacheable MPU
+		 * attrs — not Device.  Cap: ULMK_CAP_MAP_SHARED.
+		 */
+		if (hint == 0u)
+			return (uint32_t)(int32_t)ULMK_EINVAL;
+
+		base = (uintptr_t)hint;
+		rc   = thread_add_region(cur, base, size, perms, ULMK_REGION_SHARED);
+		if (rc != ULMK_OK)
+			return (uint32_t)(int32_t)rc;
+
+		ulmk_arch_mpu_switch(cur->regions, cur->region_count,
+				     cur->privilege == ULMK_PRIV_KERNEL ? 0u : 1u);
+		return (uint32_t)base;
+	}
+
 	if (flags & ULMK_MMAP_ANON) {
 		mem = ulmk_heap_alloc(size);
 		if (!mem)

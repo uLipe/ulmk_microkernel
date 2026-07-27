@@ -31,11 +31,13 @@
 
 /* RLAR[31:5]=LIMIT, [3:1]=AttrIndx, [0]=EN */
 #define RLAR_EN		(1u << 0)
-#define RLAR_ATTR_NORMAL	(0u << 1)
-#define RLAR_ATTR_DEVICE	(1u << 1)
+#define RLAR_ATTR_NORMAL	(0u << 1)	/* MAIR attr0: WB */
+#define RLAR_ATTR_DEVICE	(1u << 1)	/* MAIR attr1: Device */
+#define RLAR_ATTR_NORMAL_NC	(2u << 1)	/* MAIR attr2: Normal NC */
 
 #define MAIR0_NORMAL_WB	0xFFu	/* attr0: normal, WB non-transient RW alloc */
 #define MAIR0_DEVICE	0x00u	/* attr1: device nGnRnE */
+#define MAIR0_NORMAL_NC	0x44u	/* attr2: normal non-cacheable */
 
 static void region_disable(uint8_t slot)
 {
@@ -119,7 +121,8 @@ void ulmk_arch_mpu_init(void)
 	REG32(ULMK_ARCH_MPU_CTRL) = 0u;
 	__asm__ volatile("dsb\n\tisb" ::: "memory");
 
-	REG32(ULMK_ARCH_MPU_MAIR0) = ((uint32_t)MAIR0_DEVICE << 8) |
+	REG32(ULMK_ARCH_MPU_MAIR0) = ((uint32_t)MAIR0_NORMAL_NC << 16) |
+				     ((uint32_t)MAIR0_DEVICE << 8) |
 				     (uint32_t)MAIR0_NORMAL_WB;
 	REG32(ULMK_ARCH_MPU_MAIR1) = 0u;
 
@@ -239,9 +242,20 @@ void ulmk_arch_mpu_switch(const ulmk_arch_region_t *regions, uint8_t count,
 			if (regions[i].size == 0u ||
 			    covered_by_static(regions[i].base, regions[i].size))
 				continue;
-			region_program(slot, regions[i].base, regions[i].size,
-				       perm_to_rbar(regions[i].perms),
-				       RLAR_ATTR_NORMAL);
+			{
+				uint32_t rlar;
+
+				if (regions[i].type == ULMK_REGION_PERIPH)
+					rlar = RLAR_ATTR_DEVICE;
+				else if (regions[i].type == ULMK_REGION_SHARED)
+					rlar = RLAR_ATTR_NORMAL_NC;
+				else
+					rlar = RLAR_ATTR_NORMAL;
+				region_program(slot, regions[i].base,
+					       regions[i].size,
+					       perm_to_rbar(regions[i].perms),
+					       rlar);
+			}
 			slot++;
 		}
 	}

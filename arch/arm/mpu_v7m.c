@@ -31,16 +31,28 @@
 #define RASR_AP_RO_ANY	(0x6u << 24)
 #define RASR_MEM_NORMAL	((0x1u << 19) | (1u << 18) | (1u << 17) | (1u << 16))
 #define RASR_MEM_DEVICE	((1u << 18) | (1u << 16))
-
 /*
- * PMSAv7 regions must be a power-of-two size aligned to that size.  Kernel
- * stacks/heaps are only 8-byte aligned, so a naive round-up can leave the top
- * of the range uncovered (aligning the base down drops it below the region).
- * Pick the smallest power-of-two whose size-aligned base still spans the whole
- * [base, base+size) range; @out_base returns that aligned base.  This may
- * over-cover into adjacent RAM — acceptable, and unavoidable without the TOR
- * mode that PMSAv7 lacks (the v8-M port uses RBAR/RLAR for exact ranges).
+ * MAP_SHARED (SDRAM / FB): Normal, write-back, non-shareable (TEX=0 C=1 B=1
+ * S=0) — Cube/LTDC recipe.  Device attrs break LTDC AXI bursts (streaks /
+ * flicker).  D-cache stays off in this port, so WB is still CPU-coherent.
  */
+#define RASR_MEM_SHARED	((1u << 17) | (1u << 16))
+
+static uint32_t perm_to_attr(uint32_t perms, uint8_t type)
+{
+	uint32_t attr;
+
+	attr = (perms & ULMK_PERM_WRITE) ? RASR_AP_RW_ANY : RASR_AP_RO_ANY;
+	if (!(perms & ULMK_PERM_EXEC))
+		attr |= RASR_XN;
+	if (type == ULMK_REGION_PERIPH)
+		attr |= RASR_MEM_DEVICE;
+	else if (type == ULMK_REGION_SHARED)
+		attr |= RASR_MEM_SHARED;
+	else
+		attr |= RASR_MEM_NORMAL;
+	return attr;
+}
 static uint32_t log2_cover(uintptr_t base, uintptr_t size, uintptr_t *out_base)
 {
 	uintptr_t end = base + size;
@@ -82,17 +94,6 @@ static void region_program(uint8_t slot, uintptr_t base, uintptr_t size,
 	REG32(ULMK_ARCH_MPU_RNR)  = slot;
 	REG32(ULMK_ARCH_MPU_RBAR) = (uint32_t)rbase | RBAR_VALID | slot;
 	REG32(ULMK_ARCH_MPU_RASR) = RASR_ENABLE | ((l - 1u) << 1) | attr;
-}
-
-static uint32_t perm_to_attr(uint32_t perms, bool device)
-{
-	uint32_t attr;
-
-	attr = (perms & ULMK_PERM_WRITE) ? RASR_AP_RW_ANY : RASR_AP_RO_ANY;
-	if (!(perms & ULMK_PERM_EXEC))
-		attr |= RASR_XN;
-	attr |= device ? RASR_MEM_DEVICE : RASR_MEM_NORMAL;
-	return attr;
 }
 
 static void program_static_user(void)
@@ -237,7 +238,8 @@ void ulmk_arch_mpu_switch(const ulmk_arch_region_t *regions, uint8_t count,
 			if (regions[i].type == ULMK_REGION_STACK)
 				continue;
 			region_program(slot, regions[i].base, regions[i].size,
-				       perm_to_attr(regions[i].perms, false));
+				       perm_to_attr(regions[i].perms,
+						    regions[i].type));
 			slot++;
 		}
 	}

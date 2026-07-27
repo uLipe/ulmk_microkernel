@@ -60,6 +60,8 @@ uint32_t ulmk_syscall_router(uint32_t nr,
 	case ULMK_SYS_MMAP:
 		if (a3 & ULMK_MMAP_PERIPH)
 			REQUIRE_CAP(ULMK_CAP_MAP_PERIPH);
+		if (a3 & ULMK_MMAP_SHARED)
+			REQUIRE_CAP(ULMK_CAP_MAP_SHARED);
 		return ulmk_kern_mem_map(a0, a1, a2, a3);
 
 	case ULMK_SYS_MUNMAP:

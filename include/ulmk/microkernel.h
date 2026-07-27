@@ -141,14 +141,16 @@ typedef struct {
 #define ULMK_CAP_IRQ		(1u << 2)  /* may bind/enable hardware IRQs */
 #define ULMK_CAP_MAP_PERIPH	(1u << 3)  /* may map peripheral MMIO regions */
 #define ULMK_CAP_GRANT_CAP	(1u << 4)  /* may grant capabilities to others */
+#define ULMK_CAP_MAP_SHARED	(1u << 5)  /* may map shared phys windows (SDRAM/FB) */
 #define ULMK_CAP_ALL		0xFFu	   /* all capabilities; root thread initial */
 
 /* =========================================================================
  * Memory map flags
  * ========================================================================= */
 
-#define ULMK_MMAP_ANON	(1u << 0)
+#define ULMK_MMAP_ANON		(1u << 0)
 #define ULMK_MMAP_PERIPH	(1u << 1)
+#define ULMK_MMAP_SHARED	(1u << 2)  /* fixed phys window, Normal NC */
 
 /* =========================================================================
  * IRQ handler type — userspace attach callback (ISR fast-path)
@@ -663,8 +665,10 @@ static inline int ulmk_heap_extend(size_t size)
  * @param hint  Advisory placement address (may be NULL).
  * @param size  Region size in bytes.
  * @param perms Permission mask of @c ULMK_PERM_* flags.
- * @param flags @c ULMK_MMAP_ANON (from user pool) or @c ULMK_MMAP_PERIPH (MMIO,
- *              requires @c ULMK_CAP_MAP_PERIPH).
+ * @param flags @c ULMK_MMAP_ANON (user pool), @c ULMK_MMAP_PERIPH (MMIO,
+ *              requires @c ULMK_CAP_MAP_PERIPH), or @c ULMK_MMAP_SHARED
+ *              (fixed physical window / SDRAM / FB; requires
+ *              @c ULMK_CAP_MAP_SHARED).
  * @return Base address of the mapping, or NULL on failure.
  */
 static inline void *ulmk_mem_map(void *hint, size_t size,

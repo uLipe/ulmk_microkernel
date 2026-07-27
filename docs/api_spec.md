@@ -201,6 +201,7 @@ privileged operations.
 | `ULMK_CAP_IRQ` | 2 | `ulmk_irq_bind()`, `ulmk_irq_bind_hw()`, `ulmk_irq_attach()`, `ulmk_irq_attach_hw()`, `ulmk_irq_detach()`, `ulmk_irq_enable()`, `ulmk_irq_disable()`, `ulmk_irq_ack()` |
 | `ULMK_CAP_MAP_PERIPH` | 3 | `ulmk_mem_map()` with `ULMK_MMAP_PERIPH` |
 | `ULMK_CAP_GRANT_CAP` | 4 | `ulmk_cap_grant()` |
+| `ULMK_CAP_MAP_SHARED` | 5 | `ulmk_mem_map()` with `ULMK_MMAP_SHARED` |
 | `ULMK_CAP_ALL` | 0xFF | All capabilities; initial value of the root thread |
 
 ---
@@ -521,6 +522,7 @@ Maps a memory region.  Flags:
 |------|---------|
 | `ULMK_MMAP_ANON` | Anonymous mapping from `user_pool` |
 | `ULMK_MMAP_PERIPH` | Map a peripheral MMIO region (requires `ULMK_CAP_MAP_PERIPH`) |
+| `ULMK_MMAP_SHARED` | Map a fixed physical window (SDRAM, framebuffer, …); requires `ULMK_CAP_MAP_SHARED`. Arch MPU uses `ULMK_REGION_SHARED` (ARMv7-M: Normal WB non-shareable for FMC/LTDC; not `ULMK_MMAP_PERIPH`) |
 
 ---
 
