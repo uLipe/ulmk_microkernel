@@ -18,6 +18,11 @@ option(ULMK_OPTIMIZE_SIZE
 if(ULMK_OPTIMIZE_SIZE)
     set(ULMK_KERNEL_OPT_FLAGS -Os)
     message(STATUS "Kernel/arch optimisation: -Os (size)")
+elseif("${ULMK_COMPILER_FAMILY}" STREQUAL "ticlang")
+    # TIClang: -Ofast not supported; -fno-inline has no effect on inlining
+    # across protected-call boundaries (C29 has no CSA-style UL bit hazard).
+    set(ULMK_KERNEL_OPT_FLAGS -O3)
+    message(STATUS "Kernel/arch optimisation: -O3 (TIClang)")
 else()
     set(ULMK_KERNEL_OPT_FLAGS -Ofast -fno-inline)
     message(STATUS "Kernel/arch optimisation: -Ofast -fno-inline (speed)")
