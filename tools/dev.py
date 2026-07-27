@@ -140,6 +140,14 @@ def _apps_mount() -> list[str]:
     return []
 
 
+def _ti_mount() -> list[str]:
+    """Mount the TI installation read-only at /ti when TI_INSTALL_ROOT is set."""
+    ti_root = os.environ.get("TI_INSTALL_ROOT", "")
+    if ti_root and Path(ti_root).is_dir():
+        return ["--volume", f"{ti_root}:/ti:ro"]
+    return []
+
+
 def _component_scan_dirs(board_host: Path | None = None) -> list[Path]:
     """Return directories that may contain ulmk_component_register()."""
     dirs: list[Path] = []
@@ -364,6 +372,8 @@ def _board_arch(board: dict) -> str:
 
 
 def _toolchain_for_arch(arch: str) -> str:
+    if arch == "c29":
+        return "/workspace/cmake/toolchain-c29-ticlang.cmake"
     return f"/workspace/cmake/toolchain-{arch}-gcc.cmake"
 
 
@@ -373,11 +383,13 @@ def _build_subdir(arch: str, board_name: str) -> str:
     return f"ulipe-{arch}-{board_name}"
 
 
-def _qemu_binary(arch: str) -> str:
+def _qemu_binary(arch: str) -> str | None:
     if arch == "riscv":
         return QEMU_RISCV
     if arch == "arm":
         return QEMU_ARM
+    if arch == "c29":
+        return None  # C29 has no QEMU emulator; use DSS/XDS110 HIL
     return QEMU_TRICORE
 
 
@@ -399,18 +411,31 @@ def _resolve_board_path(board_arg: str | None) -> tuple[Path, str, list[str]]:
     return board_host, board_container, extra_mounts
 
 
+def _c29_container_path() -> str:
+    """Extend CONTAINER_PATH with the TI C29 toolchain bin when mounted."""
+    return (
+        CONTAINER_PATH
+        + '; if [ -d /ti ]; then'
+        + ' _TI_CGT=$(ls -d /ti/ccs*/ccs/tools/compiler/ti-cgt-c29* 2>/dev/null'
+        + ' || ls -d /ti/tools/compiler/ti-cgt-c29* 2>/dev/null | head -1);'
+        + ' [ -n "$_TI_CGT" ] && export PATH="$_TI_CGT/bin:${PATH}"; fi'
+    )
+
+
 def _build_shell(board_container: str, board: dict,
                  clean: bool, run_qemu: bool,
                  component_flags: list[str], build_subdir: str,
                  optimize_size: bool = False,
-                 enable_smp: bool = False) -> str:
+                 enable_smp: bool = False,
+                 flash: bool = False) -> str:
     arch = _board_arch(board)
     toolchain = _toolchain_for_arch(arch)
     qemu = _qemu_binary(arch)
 
+    path_export = _c29_container_path() if arch == "c29" else CONTAINER_PATH
     lines: list[str] = [
         "set -e",
-        CONTAINER_PATH,
+        path_export,
         "",
     ]
 
@@ -431,6 +456,8 @@ def _build_shell(board_container: str, board: dict,
         cfg.append("    -DULMK_OPTIMIZE_SIZE=ON \\")
     if enable_smp:
         cfg.append("    -DULMK_CONFIG_ENABLE_SMP=1 \\")
+    if flash:
+        cfg.append("    -DULMK_C29_FLASH=1 \\")
     for flag in component_flags:
         cfg.append(f"    {flag} \\")
     cfg += [
@@ -447,7 +474,7 @@ def _build_shell(board_container: str, board: dict,
         f"echo 'Build OK → /build/{build_subdir}/ulmk'",
     ]
 
-    if run_qemu:
+    if run_qemu and qemu is not None:
         machine = board.get("UL_BOARD_QEMU_MACHINE", "")
         if isinstance(machine, list):
             machine = machine[0] if machine else ""
@@ -563,6 +590,11 @@ def _run_build(args: argparse.Namespace) -> None:
     qemu_machine = board.get("UL_BOARD_QEMU_MACHINE", "")
     if isinstance(qemu_machine, list):
         qemu_machine = qemu_machine[0] if qemu_machine else ""
+    if run_qemu and arch == "c29":
+        sys.exit(
+            "error: C29 has no QEMU emulator — use 'build' then flash "
+            "via DSS/XDS110 HIL for silicon validation"
+        )
     if run_qemu and not qemu_machine:
         sys.exit(
             "error: board does not support QEMU "
@@ -589,13 +621,13 @@ def _run_build(args: argparse.Namespace) -> None:
         shell_cmd = _build_shell(
             board_container, board, args.clean, run_qemu, component_flags,
             build_subdir, getattr(args, "optimize_size", False),
-            enable_smp)
+            enable_smp, bool(getattr(args, "flash", False)))
 
     cmd = [
         "docker", "run", "--rm",
         "--volume", f"{WORKSPACE_ROOT}:/workspace",
         "--volume", f"{BUILD_DIR}:/build",
-    ] + extra_mounts + _apps_mount()
+    ] + extra_mounts + _apps_mount() + _ti_mount()
 
     if run_qemu and sys.stdout.isatty():
         cmd += ["--interactive", "--tty"]
@@ -1014,6 +1046,11 @@ examples:
         "--enable-smp",
         action="store_true",
         help="Build with ULMK_CONFIG_ENABLE_SMP=1 (requires board NUM_CPU>1)",
+    )
+    build_p.add_argument(
+        "--flash",
+        action="store_true",
+        help="C29: link the FLASH profile (code XIP from flash, POR boot)",
     )
 
     build_p.add_argument(
