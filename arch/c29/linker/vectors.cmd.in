@@ -1,0 +1,15 @@
+/* arch/c29/linker/vectors.cmd.in
+ * Layer 2 — startup and reset-vector sections for C29 (RAM profile).
+ *
+ * Matches TI multicore map: CPU2 @ LPA1, CPU3 @ CPA0.  CPU1 code spills
+ * from LPA0 into CPA1 via generate_ld.py (>> KERNEL_FLASH | CPU1_CPA1).
+ */
+
+    codestart : {} > 0x20100000
+    resetvector : {} > KERNEL_FLASH
+
+    /* Secondary CPU payloads — must match ULMK_C29_CPU{2,3}_RESET_ADDR. */
+    .cpu2_codestart : {} > 0x20108000
+    .cpu2_nmivector : {} > 0x20108040
+    .cpu3_codestart : {} > 0x20110000
+    .cpu3_nmivector : {} > 0x20110040

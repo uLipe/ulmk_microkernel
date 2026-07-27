@@ -1,0 +1,7 @@
+/* arch/c29/linker/vectors_flash_tail.cmd.in — after .text/.data (FLASH).
+ *
+ * resetvector must come *before* any SMP stubs in this file so the signed
+ * cert image ends at resetvector and stubs sit past it (outside the BIN).
+ */
+
+    resetvector : {} > KERNEL_FLASH

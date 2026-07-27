@@ -1,0 +1,10 @@
+/* arch/c29/linker/vectors_flash_seccfg.cmd.in — NonMain SECCFG (BANKMODE0).
+ *
+ * Blobs come from board seccfg/seccfg_cpuN.c (tools/c29_seccfg_gen.py).
+ * package-seccfg strips these unless ULMK_C29_SECCFG_COMMIT=1.
+ */
+
+    .TI.bound:CPU1_Cfg : { *(.TI.bound:CPU1_Cfg) } > SECCFG_CPU1
+    .TI.bound:CPU2_Cfg : { *(.TI.bound:CPU2_Cfg) } > SECCFG_CPU2
+    .TI.bound:CPU3_Cfg : { *(.TI.bound:CPU3_Cfg) } > SECCFG_CPU3
+    .TI.bound:CPU4_Cfg : { *(.TI.bound:CPU4_Cfg) } > SECCFG_CPU4

@@ -1,0 +1,12 @@
+/* arch/c29/linker/vectors_flash.cmd.in — startup sections, FLASH profile.
+ *
+ * CPU1 boots XIP from FLASH_RP0 (0x10001000).  Boot certificate at
+ * 0x10000000..0x10000FFF (filled post-build).
+ *
+ * resetvector is emitted after .text/.data (see generate_ld.py) so secondary
+ * stubs can follow it without punching a hole in the signed cert image.
+ */
+
+    codestart : {} > 0x10001000, palign(8)
+    /* Filled by cert_placeholder.c; package-seccfg --update-section replaces. */
+    cert : {} > CERT, palign(8)
