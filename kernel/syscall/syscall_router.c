@@ -21,6 +21,7 @@
 #include <kernel/include/ulmk_thread_internal.h>
 #include <kernel/include/ulmk_irq_internal.h>
 #include <kernel/include/ulmk_syscall_wcet_internal.h>
+#include <ulmk_arch.h>
 
 /* Shorthand: fetch caller's privilege from the scheduler. */
 static inline ulmk_privilege_t _caller_priv(void)
@@ -69,6 +70,34 @@ uint32_t ulmk_syscall_router(uint32_t nr,
 
 	case ULMK_SYS_MEM_GRANT:
 		return ulmk_kern_mem_grant(a0, a1, a2, a3);
+
+	case ULMK_SYS_DCACHE_CLEAN:
+		REQUIRE_DRIVER(a0);
+#if ULMK_ARCH_HAS_CACHE
+		ulmk_arch_dcache_clean((void *)(uintptr_t)a0, (size_t)a1);
+		return (uint32_t)(int32_t)ULMK_OK;
+#else
+		return (uint32_t)(int32_t)ULMK_ENOTSUP;
+#endif
+
+	case ULMK_SYS_DCACHE_INVALIDATE:
+		REQUIRE_DRIVER(a0);
+#if ULMK_ARCH_HAS_CACHE
+		ulmk_arch_dcache_invalidate((void *)(uintptr_t)a0, (size_t)a1);
+		return (uint32_t)(int32_t)ULMK_OK;
+#else
+		return (uint32_t)(int32_t)ULMK_ENOTSUP;
+#endif
+
+	case ULMK_SYS_DCACHE_CLEAN_INV:
+		REQUIRE_DRIVER(a0);
+#if ULMK_ARCH_HAS_CACHE
+		ulmk_arch_dcache_clean_invalidate((void *)(uintptr_t)a0,
+						  (size_t)a1);
+		return (uint32_t)(int32_t)ULMK_OK;
+#else
+		return (uint32_t)(int32_t)ULMK_ENOTSUP;
+#endif
 
 	/* Per-thread heap (slabAO model) */
 	case ULMK_SYS_GET_THREAD_HEAP:

@@ -24,7 +24,10 @@
 #define ULMK_SYS_MMAP                 1  /* void *ulmk_mem_map(hint, sz, perms, flags) */
 #define ULMK_SYS_MUNMAP               2  /* int   ulmk_mem_unmap(addr, sz)            */
 #define ULMK_SYS_MEM_GRANT            3  /* int   ulmk_mem_grant(addr, sz, tid, perms)*/
-/* slots 4-6 reserved (ulmk_malloc/free/aligned_alloc removed in slabAO model) */
+/* D-cache maintenance (DRIVER; ULMK_ENOTSUP if !ULMK_ARCH_HAS_CACHE) */
+#define ULMK_SYS_DCACHE_CLEAN         4  /* int ulmk_dcache_clean(addr, size)         */
+#define ULMK_SYS_DCACHE_INVALIDATE    5  /* int ulmk_dcache_invalidate(addr, size)    */
+#define ULMK_SYS_DCACHE_CLEAN_INV     6  /* int ulmk_dcache_clean_invalidate(...)     */
 #define ULMK_SYS_HEAP_EXTEND          7  /* int ulmk_heap_extend(size)                */
 #define ULMK_SYS_GET_THREAD_HEAP      8  /* int ulmk_get_thread_heap(info*)           */
 

@@ -855,6 +855,13 @@ The FPU is **enabled at startup** (CPACR CP10/CP11) when
 symbol as on RISC-V.  Lazy FP stacking is disabled; FP callee-saved registers
 are saved/restored explicitly by the context switch.
 
+### Cache
+
+`ULMK_ARCH_HAS_CACHE` gates L1 D-cache maintenance.  ARM Cortex-M7 sets it from
+`ULMK_BOARD_ENABLE_CPU_CACHE`; RISC-V and TriCore keep it `0` until a real
+implementation exists.  When `0`, `ulmk_dcache_*` syscalls return
+`ULMK_ENOTSUP` and `ulmk_arch_dcache_*` / `ulmk_arch_cache_enable` are no-ops.
+
 ### MPU layout
 
 Static regions cover kernel exec, kernel RAM, peripherals and the user

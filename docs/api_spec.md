@@ -522,7 +522,22 @@ Maps a memory region.  Flags:
 |------|---------|
 | `ULMK_MMAP_ANON` | Anonymous mapping from `user_pool` |
 | `ULMK_MMAP_PERIPH` | Map a peripheral MMIO region (requires `ULMK_CAP_MAP_PERIPH`) |
-| `ULMK_MMAP_SHARED` | Map a fixed physical window (SDRAM, framebuffer, …); requires `ULMK_CAP_MAP_SHARED`. Arch MPU uses `ULMK_REGION_SHARED` (ARMv7-M: Normal WB non-shareable for FMC/LTDC; not `ULMK_MMAP_PERIPH`) |
+| `ULMK_MMAP_SHARED` | Map a fixed physical window (SDRAM, framebuffer, …); requires `ULMK_CAP_MAP_SHARED`. Arch MPU uses `ULMK_REGION_SHARED` (ARMv7-M: Normal WB non-shareable for FMC/LTDC — clean D-cache before LTDC/DMA; not `ULMK_MMAP_PERIPH`) |
+
+---
+
+### D-cache maintenance
+
+```c
+int ulmk_dcache_clean(const void *addr, size_t size);
+int ulmk_dcache_invalidate(const void *addr, size_t size);
+int ulmk_dcache_clean_invalidate(const void *addr, size_t size);
+```
+
+Requires `ULMK_PRIV_DRIVER`.  Implemented only when the arch sets
+`ULMK_ARCH_HAS_CACHE` (ARM Cortex-M7 with `ULMK_BOARD_ENABLE_CPU_CACHE=1`).
+Otherwise the syscalls return `ULMK_ENOTSUP`.  Pass `size == 0` to
+`ulmk_dcache_clean` to clean the entire D-cache (set/way).
 
 ---
 

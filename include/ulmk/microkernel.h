@@ -714,6 +714,46 @@ static inline int ulmk_mem_grant(void *addr, size_t size,
 	return (int)r;
 }
 
+/**
+ * @brief Clean D-cache lines covering [@p addr, @p addr+@p size).
+ * @param size  Byte length; pass 0 to clean the entire D-cache (set/way).
+ * @pre @c ULMK_PRIV_DRIVER.
+ * @return @c ULMK_OK, @c ULMK_EPERM, or @c ULMK_ENOTSUP when
+ *         @c ULMK_ARCH_HAS_CACHE is 0.
+ */
+static inline int ulmk_dcache_clean(const void *addr, size_t size)
+{
+	uint32_t r;
+	ULMK_SYSCALL_2(ULMK_SYS_DCACHE_CLEAN, addr, size, r);
+	return (int)r;
+}
+
+/**
+ * @brief Invalidate D-cache lines covering [@p addr, @p addr+@p size).
+ * @pre @c ULMK_PRIV_DRIVER.
+ * @return @c ULMK_OK, @c ULMK_EPERM, or @c ULMK_ENOTSUP when
+ *         @c ULMK_ARCH_HAS_CACHE is 0.
+ */
+static inline int ulmk_dcache_invalidate(const void *addr, size_t size)
+{
+	uint32_t r;
+	ULMK_SYSCALL_2(ULMK_SYS_DCACHE_INVALIDATE, addr, size, r);
+	return (int)r;
+}
+
+/**
+ * @brief Clean+invalidate D-cache lines covering [@p addr, @p addr+@p size).
+ * @pre @c ULMK_PRIV_DRIVER.
+ * @return @c ULMK_OK, @c ULMK_EPERM, or @c ULMK_ENOTSUP when
+ *         @c ULMK_ARCH_HAS_CACHE is 0.
+ */
+static inline int ulmk_dcache_clean_invalidate(const void *addr, size_t size)
+{
+	uint32_t r;
+	ULMK_SYSCALL_2(ULMK_SYS_DCACHE_CLEAN_INV, addr, size, r);
+	return (int)r;
+}
+
 /* =========================================================================
  * IRQ API — docs/api_spec.md §10  (requires ULMK_PRIV_DRIVER)
  * ========================================================================= */
