@@ -19,6 +19,11 @@
 #define ULMK_ARCH_NUM_CPU	1
 #endif
 
+/* No managed L1 D-cache ops on this port yet — dcache syscalls → ENOTSUP. */
+#ifndef ULMK_ARCH_HAS_CACHE
+#define ULMK_ARCH_HAS_CACHE	0
+#endif
+
 #ifndef ULMK_BOARD_SRC_BASE
 #error "board_config.h must define ULMK_BOARD_SRC_BASE (SoC SRC block base)"
 #endif

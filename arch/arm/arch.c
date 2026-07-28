@@ -509,6 +509,11 @@ void ulmk_arch_init(ulmk_boot_info_t *info)
 
 	exc_priorities_init();
 	ulmk_arch_mpu_init();
+	/*
+	 * MPU attrs must be live before enabling I/D-cache so SDRAM/FB and
+	 * Normal RAM pick up WB vs Device correctly.
+	 */
+	ulmk_arch_cache_enable();
 	ulmk_arch_irq_vectors_init(0u, 0u, 0u);
 	/* SysTick is armed lazily on the first context switch (see sched_switch). */
 }

@@ -114,6 +114,16 @@ void ulmk_arch_sched_switch(ulmk_arch_ctx_t *from, const ulmk_arch_ctx_t *to,
 void ulmk_arch_mpu_init(void);
 void ulmk_arch_mpu_enable(void);
 void ulmk_arch_mpu_disable(void);
+
+/* L1 cache (no-op / ENOTSUP when ULMK_ARCH_HAS_CACHE=0). DRIVER syscall. */
+void ulmk_arch_cache_enable(void);
+void ulmk_arch_dcache_clean_all(void);
+void ulmk_arch_dcache_invalidate_all(void);
+void ulmk_arch_dcache_clean_invalidate_all(void);
+void ulmk_arch_icache_invalidate_all(void);
+void ulmk_arch_dcache_clean(void *addr, size_t len); /* len==0 → clean all */
+void ulmk_arch_dcache_invalidate(void *addr, size_t len);
+void ulmk_arch_dcache_clean_invalidate(void *addr, size_t len);
 void ulmk_arch_mpu_configure(uint8_t prs, const ulmk_arch_region_t *regions,
 			   uint8_t count);
 void ulmk_arch_mpu_switch(const ulmk_arch_region_t *regions, uint8_t count,

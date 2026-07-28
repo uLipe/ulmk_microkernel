@@ -820,3 +820,43 @@ uint32_t ulmk_arch_timer_wheel_cpu(void)
 {
 	return ulmk_arch_cpu_id();
 }
+
+/* Cache stubs — ULMK_ARCH_HAS_CACHE=0; syscalls return ENOTSUP. */
+void ulmk_arch_cache_enable(void)
+{
+}
+
+void ulmk_arch_dcache_clean_all(void)
+{
+}
+
+void ulmk_arch_dcache_invalidate_all(void)
+{
+}
+
+void ulmk_arch_dcache_clean_invalidate_all(void)
+{
+}
+
+void ulmk_arch_icache_invalidate_all(void)
+{
+}
+
+
+void ulmk_arch_dcache_clean(void *addr, size_t len)
+{
+	(void)addr;
+	(void)len;
+}
+
+void ulmk_arch_dcache_invalidate(void *addr, size_t len)
+{
+	(void)addr;
+	(void)len;
+}
+
+void ulmk_arch_dcache_clean_invalidate(void *addr, size_t len)
+{
+	(void)addr;
+	(void)len;
+}

@@ -36,6 +36,20 @@
 #define ULMK_ARCH_HAVE_FPU	1
 #endif
 
+/*
+ * L1 I/D-cache (Cortex-M7).  Off by default — board must set
+ * ULMK_BOARD_ENABLE_CPU_CACHE=1 (see board_config.h).  When on, SHARED/Normal
+ * regions become cacheable; drivers must clean/invalidate around DMA/LTDC.
+ * Kernel syscalls return ULMK_ENOTSUP when this is 0.
+ */
+#ifndef ULMK_ARCH_HAS_CACHE
+#ifdef ULMK_BOARD_ENABLE_CPU_CACHE
+#define ULMK_ARCH_HAS_CACHE	ULMK_BOARD_ENABLE_CPU_CACHE
+#else
+#define ULMK_ARCH_HAS_CACHE	0
+#endif
+#endif
+
 /* Idle: WFI suspends the core until the next interrupt (default on). */
 #ifndef ULMK_ARCH_IDLE_IS_WFI
 #define ULMK_ARCH_IDLE_IS_WFI	1

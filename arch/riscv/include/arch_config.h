@@ -20,6 +20,11 @@
 #define ULMK_ARCH_HAVE_FPU	0
 #endif
 
+/* No managed L1 D-cache ops on this port yet — dcache syscalls → ENOTSUP. */
+#ifndef ULMK_ARCH_HAS_CACHE
+#define ULMK_ARCH_HAS_CACHE	0
+#endif
+
 #ifndef ULMK_ARCH_PMP_NUM
 #define ULMK_ARCH_PMP_NUM	8
 #endif

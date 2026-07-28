@@ -25,6 +25,7 @@ elseif(ULMK_ARCH STREQUAL "riscv")
 elseif(ULMK_ARCH STREQUAL "arm")
 	set(ULMK_ARCH_KERNEL_SOURCES
 		${ULMK_ARCH_DIR}/arch.c
+		${ULMK_ARCH_DIR}/cache.c
 		${ULMK_ARCH_DIR}/irq.c
 		${ULMK_ARCH_DIR}/mpu_v7m.c
 		${ULMK_ARCH_DIR}/mpu_v8m.c

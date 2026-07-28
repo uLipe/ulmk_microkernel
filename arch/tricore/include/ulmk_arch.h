@@ -125,6 +125,16 @@ void ulmk_arch_sched_switch(ulmk_arch_ctx_t *from, const ulmk_arch_ctx_t *to,
  * ========================================================================= */
 
 void ulmk_arch_mpu_init(void);
+
+/* Cache maintenance — no-op stubs (API parity with ARM). */
+void ulmk_arch_cache_enable(void);
+void ulmk_arch_dcache_clean_all(void);
+void ulmk_arch_dcache_invalidate_all(void);
+void ulmk_arch_dcache_clean_invalidate_all(void);
+void ulmk_arch_icache_invalidate_all(void);
+void ulmk_arch_dcache_clean(void *addr, size_t len);
+void ulmk_arch_dcache_invalidate(void *addr, size_t len);
+void ulmk_arch_dcache_clean_invalidate(void *addr, size_t len);
 void ulmk_arch_mpu_enable(void);
 void ulmk_arch_mpu_disable(void);
 

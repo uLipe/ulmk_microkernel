@@ -32,9 +32,9 @@
 #define RASR_MEM_NORMAL	((0x1u << 19) | (1u << 18) | (1u << 17) | (1u << 16))
 #define RASR_MEM_DEVICE	((1u << 18) | (1u << 16))
 /*
- * MAP_SHARED (SDRAM / FB): Normal, write-back, non-shareable (TEX=0 C=1 B=1
- * S=0) — Cube/LTDC recipe.  Device attrs break LTDC AXI bursts (streaks /
- * flicker).  D-cache stays off in this port, so WB is still CPU-coherent.
+ * MAP_SHARED (SDRAM / FB): Normal write-back, non-shareable (TEX=0 C=1 B=1).
+ * Device attrs break LTDC AXI bursts.  Framebuffers need D-cache clean before
+ * LTDC present (bus master bypasses the CPU cache).
  */
 #define RASR_MEM_SHARED	((1u << 17) | (1u << 16))
 
@@ -220,16 +220,13 @@ void ulmk_arch_mpu_switch(const ulmk_arch_region_t *regions, uint8_t count,
 	}
 
 	/*
-	 * Reprogram with the MPU off.  A per-thread region's power-of-two
-	 * round-up (log2_cover) can transiently over-cover the kernel .text
-	 * that this very code executes from; with the MPU live that raises an
-	 * IACCVIOL mid-switch.  Disabling first makes the update atomic w.r.t.
-	 * the running privileged code.
+	 * Keep MPU ENABLE + PRIVDEFENA while reprogramming.  Turning the MPU
+	 * fully off with D-cache live requires a whole-cache clean/invalidate
+	 * (stale memory types); doing that on every switch kills FB/WB
+	 * performance.  PRIVDEFENA keeps privileged fetches on the default
+	 * map for addresses that do not hit a programmed region; dynamic
+	 * slots are rewritten one at a time via region_program().
 	 */
-	__asm__ volatile("dsb" ::: "memory");
-	REG32(ULMK_ARCH_MPU_CTRL) = 0u;
-	__asm__ volatile("dsb\n\tisb" ::: "memory");
-
 	program_static_user();
 
 	slot = ULMK_ARCH_MPU_USER_BASE;
