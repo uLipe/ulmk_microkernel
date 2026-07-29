@@ -59,3 +59,8 @@ build-riscv/
 # SDK suite object leftovers
 tests/sdk_suite/**/*.o
 .hil_tmp/
+
+# Scratch dropped in the tree by the TriCore debug tooling
+hs_err_pid*.log
+c29_peek.xml
+dss-reset-run
