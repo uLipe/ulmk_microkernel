@@ -376,7 +376,13 @@ def _board_arch(board: dict) -> str:
     return arch
 
 
-def _toolchain_for_arch(arch: str) -> str:
+def _toolchain_for_arch(arch: str, board: dict | None = None) -> str:
+    if board:
+        tc = board.get("UL_BOARD_TOOLCHAIN", "")
+        if isinstance(tc, list):
+            tc = tc[0] if tc else ""
+        if tc:
+            return f"/workspace/cmake/toolchain-{tc}.cmake"
     return f"/workspace/cmake/toolchain-{arch}-gcc.cmake"
 
 
@@ -418,7 +424,7 @@ def _build_shell(board_container: str, board: dict,
                  optimize_size: bool = False,
                  enable_smp: bool = False) -> str:
     arch = _board_arch(board)
-    toolchain = _toolchain_for_arch(arch)
+    toolchain = _toolchain_for_arch(arch, board)
     qemu = _qemu_binary(arch)
 
     lines: list[str] = [
@@ -511,7 +517,7 @@ def _sdk_build_shell(board_container: str, board: dict, board_name: str,
     integration test (tests/sdk_e2e).
     """
     arch = _board_arch(board)
-    toolchain = _toolchain_for_arch(arch)
+    toolchain = _toolchain_for_arch(arch, board)
     build = f"/build/ulipe-{arch}-sdk"
     # Kept under dist/ so the output tree never collides with the CMake
     # validation executable, which is itself named "ulmk" at the build root.
@@ -561,6 +567,57 @@ def _run_sdk_build(args: argparse.Namespace) -> None:
     print(f"\nDistributable SDK on host → {host_sdk}")
 
 
+def _run_host_build(board_host: Path, board: dict, build_subdir: str,
+                    clean: bool, component_flags: list[str],
+                    enable_smp: bool, optimize_size: bool) -> None:
+    """Native host cmake/ninja for boards that need Espressif toolchain."""
+    arch = _board_arch(board)
+    tc_name = board.get("UL_BOARD_TOOLCHAIN", f"{arch}-gcc")
+    if isinstance(tc_name, list):
+        tc_name = tc_name[0] if tc_name else f"{arch}-gcc"
+    toolchain = WORKSPACE_ROOT / "cmake" / f"toolchain-{tc_name}.cmake"
+    build_path = BUILD_DIR / build_subdir
+
+    env = os.environ.copy()
+    idf = env.get("ESP_IDF_PATH") or env.get("IDF_PATH") or "/home/ulipe/fun/esp-idf"
+    env["ESP_IDF_PATH"] = idf
+    env["IDF_PATH"] = idf
+
+    esp_bins = sorted(Path.home().glob(
+        ".espressif/tools/riscv32-esp-elf/*/riscv32-esp-elf/bin"))
+    # Prefer GCC 14+ (esp-14.*) over legacy esp-2021r2 which rejects
+    # -march=…_zicsr_zifencei.
+    preferred = [p for p in esp_bins if "esp-14" in str(p) or "esp-15" in str(p)]
+    pick = preferred[-1] if preferred else (esp_bins[-1] if esp_bins else None)
+    if pick:
+        env["PATH"] = f"{pick}:{env.get('PATH', '')}"
+        env["CMAKE_C_COMPILER"] = str(pick / "riscv32-esp-elf-gcc")
+        env["CMAKE_ASM_COMPILER"] = str(pick / "riscv32-esp-elf-gcc")
+
+    if clean and build_path.exists():
+        import shutil
+        shutil.rmtree(build_path)
+    build_path.mkdir(parents=True, exist_ok=True)
+
+    cfg = [
+        "cmake", "-S", str(WORKSPACE_ROOT), "-B", str(build_path),
+        f"-DCMAKE_TOOLCHAIN_FILE={toolchain}",
+        f"-DULMK_CHIP_DIR={board_host}",
+        "-GNinja", "--no-warn-unused-cli",
+    ]
+    if optimize_size:
+        cfg.append("-DULMK_OPTIMIZE_SIZE=ON")
+    if enable_smp:
+        cfg.append("-DULMK_CONFIG_ENABLE_SMP=1")
+    cfg.extend(component_flags)
+
+    print("--- host configure ---")
+    subprocess.run(cfg, check=True, env=env)
+    print("--- host build ---")
+    subprocess.run(["ninja", "-C", str(build_path)], check=True, env=env)
+    print(f"Build OK → {build_path}/ulmk")
+
+
 def _run_build(args: argparse.Namespace) -> None:
     if getattr(args, "kernel", False):
         _run_sdk_build(args)
@@ -594,6 +651,15 @@ def _run_build(args: argparse.Namespace) -> None:
     enable_smp = bool(getattr(args, "enable_smp", False))
     if "silicon_smp_smoke" in enabled:
         enable_smp = True
+
+    host_flag = board.get("UL_BOARD_HOST_BUILD", "0")
+    if isinstance(host_flag, list):
+        host_flag = host_flag[0] if host_flag else "0"
+    if str(host_flag) in ("1", "ON", "TRUE", "true"):
+        _run_host_build(
+            board_host, board, build_subdir, args.clean, component_flags,
+            enable_smp, getattr(args, "optimize_size", False))
+        return
 
     elf = BUILD_DIR / build_subdir / "ulmk"
     if run_qemu and not args.clean and elf.is_file():
