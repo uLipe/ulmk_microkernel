@@ -272,7 +272,13 @@ static void pmp_set_napot(uint8_t idx, uintptr_t base, uintptr_t size, uint8_t p
 		napot <<= 1u;
 	}
 	base = aligned;
-	addr = pmp_addr_encode(base) | (pmp_addr_encode(napot) - 1u);
+	/*
+	 * NAPOT encodes size as a run of low ones: pmpaddr = base/4 with the
+	 * bottom log2(size/8) bits set.  Using size/4 sets one bit too many,
+	 * which doubles the window — and where base/4 already ends in ones the
+	 * two runs merge and the region grows by orders of magnitude.
+	 */
+	addr = pmp_addr_encode(base) | ((uint32_t)(napot >> 3u) - 1u);
 	pmp_write_cfg(idx, 0u);
 	pmp_write_addr(idx, addr);
 	pmp_write_cfg(idx, perm | PMP_A_NAPOT);
