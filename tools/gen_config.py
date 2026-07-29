@@ -32,6 +32,10 @@ KERNEL_DEFAULTS = {
     "ULMK_CONFIG_ENABLE_SMP":       0,    # 1 = multi-CPU sched (needs NUM_CPU>1)
     "ULMK_CONFIG_TICK_HZ":          1000, # kernel timing-wheel tick rate
     "ULMK_CONFIG_IRQ_ATTACH":       0,    # 1 = DANGEROUS ISR userspace callbacks
+    "ULMK_CONFIG_ROOT_STACK_SIZE":  4096, # kernel_main.c root thread stack
+    "ULMK_CONFIG_BOARD_IRQ_CTRL":   0,    # 1 = board interrupt-controller hooks
+    "ULMK_CONFIG_BOARD_IRQ_CLAIM":  0,    # 1 = board sees IRQs before dispatch
+    "ULMK_CONFIG_BOARD_PMP_EXTRA":  0,    # 1 = board adds protection entries
 }
 
 # Inclusive range checks for numeric policy symbols.
@@ -41,6 +45,10 @@ KERNEL_RANGES = {
     "ULMK_CONFIG_ENABLE_SMP":       (0, 1),
     "ULMK_CONFIG_TICK_HZ":          (1, 10000),
     "ULMK_CONFIG_IRQ_ATTACH":       (0, 1),
+    "ULMK_CONFIG_ROOT_STACK_SIZE":  (1024, 65536),
+    "ULMK_CONFIG_BOARD_IRQ_CTRL":   (0, 1),
+    "ULMK_CONFIG_BOARD_IRQ_CLAIM":  (0, 1),
+    "ULMK_CONFIG_BOARD_PMP_EXTRA":  (0, 1),
 }
 
 

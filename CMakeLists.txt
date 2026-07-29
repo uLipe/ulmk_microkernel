@@ -81,6 +81,10 @@ execute_process(
         --set "ULMK_CONFIG_ENABLE_SMP=${ULMK_CONFIG_ENABLE_SMP}"
         --set "ULMK_CONFIG_TICK_HZ=${ULMK_CONFIG_TICK_HZ}"
         --set "ULMK_CONFIG_IRQ_ATTACH=${ULMK_CONFIG_IRQ_ATTACH}"
+        --set "ULMK_CONFIG_ROOT_STACK_SIZE=${ULMK_CONFIG_ROOT_STACK_SIZE}"
+        --set "ULMK_CONFIG_BOARD_IRQ_CTRL=${ULMK_CONFIG_BOARD_IRQ_CTRL}"
+        --set "ULMK_CONFIG_BOARD_IRQ_CLAIM=${ULMK_CONFIG_BOARD_IRQ_CLAIM}"
+        --set "ULMK_CONFIG_BOARD_PMP_EXTRA=${ULMK_CONFIG_BOARD_PMP_EXTRA}"
     RESULT_VARIABLE _ulmk_gen_rc)
 if(NOT _ulmk_gen_rc EQUAL 0)
     message(FATAL_ERROR "gen_config.py failed (rc=${_ulmk_gen_rc})")
