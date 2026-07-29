@@ -859,8 +859,8 @@ Output tree (`build/ulipe-<arch>-sdk/dist/ulmk/`, with
 ```
 ulmk/
   lib/
-    ulmk_kernel_<tag>.a          kernel + arch — supervisor code/data (CPR0)
-    ulmk_board_<tag>.a           startup + vectors + board services + user
+    libulmk_kernel_<tag>.a       kernel + arch — supervisor code/data (CPR0)
+    libulmk_board_<tag>.a        startup + vectors + board services + user
                                  entry — driver-privilege userspace (CPR1)
   linker/
     linker_<tag>.ld              fully-processed, self-contained linker script
@@ -897,7 +897,7 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 Everything else ships in the archives:
 
 - `_start` (reset entry) and the vector tables are force-linked from
-  `ulmk_board_<tag>.a` via `EXTERN(...)` in the linker script — **no**
+  `libulmk_board_<tag>.a` via `EXTERN(...)` in the linker script — **no**
   whole-archive / `--whole-archive` flag is needed.
 - `ulmk_board_init()` (early chip setup) and `board_services_init()` (spawns the
   console/timer service threads) live in the board archive.  Use
@@ -919,9 +919,8 @@ $CC -mcpu=tc39xx -ffreestanding -O2 -g \
     -T $SDK/linker/linker_<tag>.ld \
     -nostartfiles -Wl,--gc-sections -Wl,--no-warn-rwx-segments \
     my_root_thread.c my_app.c \
-    -Wl,--start-group \
-        $SDK/lib/ulmk_board_<tag>.a $SDK/lib/ulmk_kernel_<tag>.a \
-    -Wl,--end-group \
+    -L$SDK/lib \
+    -Wl,--start-group -lulmk_board_<tag> -lulmk_kernel_<tag> -Wl,--end-group \
     -lc -lgcc \
     -o firmware.elf
 ```
@@ -930,7 +929,12 @@ In an IDE, translate this to:
 
 - **Include paths:** `$SDK/include` and `$SDK/include/board`
 - **Linker script:** `$SDK/linker/linker_<tag>.ld` (replace any default script)
-- **Libraries:** both `.a` files, added as a group
+- **Library search path:** `$SDK/lib`
+- **Libraries:** `ulmk_board_<tag>` and `ulmk_kernel_<tag>`, as a group.  The
+  two archives reference each other, so a single pass in either order leaves
+  undefined symbols.  If the IDE emits its library list outside its own
+  `--start-group`, listing the board archive a second time after the kernel
+  resolves the cycle just as well.
 - **Flags:** `-nostartfiles` (do not let the toolchain inject its own crt0)
 
 ### 14.5 Reference consumer

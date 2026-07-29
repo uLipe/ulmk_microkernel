@@ -199,8 +199,8 @@ This emits a self-contained tree under `build/ulipe-<arch>-sdk/dist/ulmk/`:
 
 ```
 ulmk/
-  lib/ulmk_kernel_<tag>.a     kernel + arch (supervisor)
-  lib/ulmk_board_<tag>.a      startup + vectors + board services (driver)
+  lib/libulmk_kernel_<tag>.a  kernel + arch (supervisor)
+  lib/libulmk_board_<tag>.a   startup + vectors + board services (driver)
   linker/linker_<tag>.ld      processed linker script
   include/                    public microkernel + board headers
 ```

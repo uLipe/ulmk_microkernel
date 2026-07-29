@@ -534,14 +534,14 @@ Output (under `build/ulipe-<arch>-sdk/dist/`):
 
 ```
 ulmk/
-  lib/ulmk_kernel_<arch>_<board>_gcc.a   kernel + arch (kernel text/data, CPR0)
-  lib/ulmk_board_<arch>_<board>_gcc.a    startup + vectors + board + user entry
-                                         (userspace text/BSS, CPR1)
-  linker/linker_<arch>_<board>_gcc.ld    fully-processed linker script
-  include/ulmk/*.h                       public microkernel API
-  include/ulmk_syscall_abi.h             arch SYSCALL ABI (ULMK_SYSCALL_N macros;
-                                         redirected to by <ulmk/syscall_abi.h>)
-  include/board/*.h                      public board services / board init API
+  lib/libulmk_kernel_<arch>_<board>_gcc.a  kernel + arch (kernel text/data, CPR0)
+  lib/libulmk_board_<arch>_<board>_gcc.a   startup + vectors + board + user entry
+                                           (userspace text/BSS, CPR1)
+  linker/linker_<arch>_<board>_gcc.ld      fully-processed linker script
+  include/ulmk/*.h                         public microkernel API
+  include/ulmk_syscall_abi.h               arch SYSCALL ABI (ULMK_SYSCALL_N macros;
+                                           redirected to by <ulmk/syscall_abi.h>)
+  include/board/*.h                        public board services / board init API
 ```
 
 `include/ulmk_syscall_abi.h` is the architecture-specific ABI header.
@@ -551,13 +551,16 @@ consumer of the public API fails to compile.
 
 Two archives instead of one: the kernel runs at supervisor privilege (CPR0)
 while board services run as driver-privilege userspace threads (CPR1), and the
-linker separates the two by archive name.  Consumers link **both** archives —
-group them to resolve the kernel⇄board cross-references:
+linker separates the two by archive name.  The archives carry the lib prefix so
+that a consumer can name them with plain `-l`, which is all a vendor IDE's
+library field emits.  Link **both**, grouped to resolve the kernel⇄board
+cross-references:
 
 ```bash
 <arch>-gcc -T linker_<arch>_<board>_gcc.ld -nostartfiles -Wl,--gc-sections \
     my_root_thread.o my_app.o \
-    -Wl,--start-group ulmk_board_<...>.a ulmk_kernel_<...>.a -Wl,--end-group \
+    -L<sdk>/lib \
+    -Wl,--start-group -lulmk_board_<...> -lulmk_kernel_<...> -Wl,--end-group \
     -o firmware.elf
 ```
 

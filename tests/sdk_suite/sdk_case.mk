@@ -89,8 +89,8 @@ OUT   := $(CURDIR)/_out
 BUILD := $(SDK_CACHE)/build
 SDK   := $(SDK_CACHE)/ulmk
 
-KERNEL_A := $(SDK)/lib/ulmk_kernel_$(TAG).a
-BOARD_A  := $(SDK)/lib/ulmk_board_$(TAG).a
+KERNEL_A := $(SDK)/lib/libulmk_kernel_$(TAG).a
+BOARD_A  := $(SDK)/lib/libulmk_board_$(TAG).a
 LD       := $(SDK)/linker/linker_$(TAG).ld
 
 TARGET := $(CASE_NAME).elf
@@ -140,9 +140,15 @@ sdk:
 all: sdk $(TARGET)
 
 $(TARGET): sdk $(KERNEL_A) $(BOARD_A) $(LD) $(CASE_SRCS) $(COMMON)/sdk_test_util.h
+	# Link the way a consumer does, through -L/-l rather than by path, so a
+	# regression in the shipped archive names shows up here and not in
+	# someone's IDE.
 	$(CC) $(CFLAGS) $(LDFLAGS) \
 		$(CASE_SRCS) \
-		-Wl,--start-group $(BOARD_A) $(KERNEL_A) -Wl,--end-group \
+		-L$(SDK)/lib \
+		-Wl,--start-group \
+		-lulmk_board_$(TAG) -lulmk_kernel_$(TAG) \
+		-Wl,--end-group \
 		-lc -lgcc \
 		-o $@
 

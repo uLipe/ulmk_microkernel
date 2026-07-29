@@ -71,8 +71,11 @@ fi
 if [ "$ENABLE_IRQ_ATTACH" -eq 1 ]; then
 	TAG="${TAG}_irqattach"
 fi
-KERNEL_A="ulmk_kernel_${TAG}.a"
-BOARD_A="ulmk_board_${TAG}.a"
+# The lib prefix is what makes -lulmk_kernel_<tag> resolve; without it a
+# consumer has to fall back to -l:<file> or an absolute path, which vendor
+# IDEs do not generate from their "Libraries" field.
+KERNEL_A="libulmk_kernel_${TAG}.a"
+BOARD_A="libulmk_board_${TAG}.a"
 LD="linker_${TAG}.ld"
 
 if [ "$CLEAN" -eq 1 ]; then
