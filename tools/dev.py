@@ -110,6 +110,12 @@ def _base_docker_cmd(interactive: bool) -> list[str]:
     cmd = [
         "docker", "run",
         "--rm",
+        # Everything the container writes lands on a bind mount, so run it as
+        # the invoking user: as root it would hand back build trees the user
+        # cannot delete without a chown.  The uid has no passwd entry inside,
+        # which leaves HOME unset and pointing at an unwritable /.
+        "--user", f"{os.getuid()}:{os.getgid()}",
+        "--env", "HOME=/tmp",
         "--volume", f"{WORKSPACE_ROOT}:/workspace",
         "--workdir", "/workspace",
     ]
@@ -555,9 +561,7 @@ def _run_sdk_build(args: argparse.Namespace) -> None:
         board_container, board, board_name, args.clean,
         getattr(args, "optimize_size", False))
 
-    cmd = [
-        "docker", "run", "--rm",
-        "--volume", f"{WORKSPACE_ROOT}:/workspace",
+    cmd = _base_docker_cmd(interactive=False) + [
         "--volume", f"{BUILD_DIR}:/build",
     ] + extra_mounts + _apps_mount()
     cmd += [IMAGE_NAME, "/bin/bash", "-c", shell_cmd]
@@ -670,14 +674,10 @@ def _run_build(args: argparse.Namespace) -> None:
             build_subdir, getattr(args, "optimize_size", False),
             enable_smp)
 
-    cmd = [
-        "docker", "run", "--rm",
-        "--volume", f"{WORKSPACE_ROOT}:/workspace",
+    cmd = _base_docker_cmd(
+        interactive=run_qemu and sys.stdout.isatty()) + [
         "--volume", f"{BUILD_DIR}:/build",
     ] + extra_mounts + _apps_mount()
-
-    if run_qemu and sys.stdout.isatty():
-        cmd += ["--interactive", "--tty"]
 
     cmd += [IMAGE_NAME, "/bin/bash", "-c", shell_cmd]
     subprocess.run(cmd, check=True)
