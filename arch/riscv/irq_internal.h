@@ -32,4 +32,8 @@ void riscv_irq_src_trigger(uint8_t srpn);
 
 void _arch_generic_isr_handler(void);
 
+#if ULMK_ARCH_HAVE_CLIC
+void riscv_clic_drop_mil(void);
+#endif
+
 #endif /* ULMK_RISCV_IRQ_INTERNAL_H */

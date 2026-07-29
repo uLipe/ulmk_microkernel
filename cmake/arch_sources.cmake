@@ -19,7 +19,8 @@ elseif(ULMK_ARCH STREQUAL "riscv")
 		${ULMK_ARCH_DIR}/irq_clic.c
 		${ULMK_ARCH_DIR}/irq_plic.c
 		${ULMK_ARCH_DIR}/ctx_switch.S
-		${ULMK_ARCH_DIR}/trap.S)
+		${ULMK_ARCH_DIR}/trap.S
+		${ULMK_ARCH_DIR}/clic_mtvt.S)
 	set(ULMK_ARCH_EXE_SOURCES
 		${ULMK_ARCH_DIR}/startup.S)
 elseif(ULMK_ARCH STREQUAL "arm")

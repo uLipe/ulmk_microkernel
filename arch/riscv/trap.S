@@ -8,7 +8,11 @@
 	 * ecall; leaving them live lets the callee (or IRQ C path) clobber them
 	 * and userspace reloads as `lw rd, %lo(sym)(zero)` → mtval=lo12.
 	 */
-	.equ TF_SIZE, 144
+	/*
+	 * TF_MCAUSE is mandatory on Espressif CLIC: mret restores mintstatus
+	 * from mcause.MPIL.  Leaving a stale/clobbered mcause masks further IRQs.
+	 */
+	.equ TF_SIZE, 148
 	.equ TF_RA, 0
 	.equ TF_SP, 4
 	.equ TF_GP, 8
@@ -42,14 +46,17 @@
 	.equ TF_T4, 120
 	.equ TF_T5, 124
 	.equ TF_T6, 128
+	.equ TF_MCAUSE, 132
 
 	.extern _ulmk_trap_dispatch
 	.extern g_trap_sp
 
 	.section .text.trap, "ax", @progbits
-	/* mtvec (direct mode) requires the trap base to be 4-byte aligned;
-	 * with RVC the linker may otherwise place this at a 2-byte boundary. */
-	.balign 4
+	/*
+	 * CLIC mtvec mode 3: exception PC = mtvec[31:6]<<6 — must be
+	 * 64-byte aligned.  Direct mode only needs 4-byte align.
+	 */
+	.balign 64
 	.global _trap_handler
 	.type _trap_handler, @function
 _trap_handler:
@@ -88,6 +95,8 @@ _trap_handler:
 	sw      t0, TF_MEPC(sp)
 	csrr    t0, mstatus
 	sw      t0, TF_MSTATUS(sp)
+	csrr    t0, mcause
+	sw      t0, TF_MCAUSE(sp)
 	addi    t0, sp, TF_SIZE
 	sw      t0, TF_SP(sp)
 
@@ -133,6 +142,8 @@ _trap_handler:
 	lw      s11, TF_S11(sp)
 	lw      t0, TF_MEPC(sp)
 	csrw    mepc, t0
+	lw      t0, TF_MCAUSE(sp)
+	csrw    mcause, t0
 	lw      t0, TF_MSTATUS(sp)
 	/* MIE must stay clear until mret; nested IRQ here corrupts mepc. */
 	andi    t0, t0, ~8
