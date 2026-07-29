@@ -88,6 +88,11 @@ def main():
 
     out.append("\nSECTIONS {\n")
 
+    # Optional chip app/header fragment before vectors (ESP32 app_desc, etc.)
+    app_desc = os.path.join(args.chip_dir, "app_desc.ld.in")
+    if os.path.exists(app_desc):
+        out.append(read_fragment(app_desc))
+
     # 3. [optional] BMHD
     bmhd_path = os.path.join(args.chip_dir, "bmhd.ld.in")
     if flags["HAVE_BMHD"] and os.path.exists(bmhd_path):
@@ -124,11 +129,21 @@ def main():
     # 4f. Userspace runtime / orphan flash (libgcc, etc.)
     out.append(read_fragment(os.path.join(args.kernel_dir, "user_runtime.ld.in")))
 
+    # Optional chip flash pad (e.g. ESP32 64 KiB MMU page before .data LMA)
+    flash_pad = os.path.join(args.chip_dir, "flash_pad.ld.in")
+    if os.path.exists(flash_pad):
+        out.append(read_fragment(flash_pad))
+
     # 4g. Domain descriptor table (flash)
     out.append(read_fragment(os.path.join(args.kernel_dir, "domain_table.ld.in")))
 
-    # 4h. Kernel data (libulmk_kernel.a only)
-    out.append(read_fragment(os.path.join(args.kernel_dir, "kernel_data.ld.in")))
+    # 4h. Kernel data (libulmk_kernel.a only) — chip may override for flash LMA
+    kd = os.path.join(args.chip_dir, "kernel_data.ld.in")
+    if os.path.exists(kd):
+        out.append(read_fragment(kd))
+    else:
+        out.append(read_fragment(os.path.join(args.kernel_dir, "kernel_data.ld.in")))
+
 
     # 4i. Kernel stacks
     out.append(read_fragment(os.path.join(args.kernel_dir, "kernel_stacks.ld.in")))
@@ -181,6 +196,11 @@ def main():
     mem_sym = os.path.join(args.kernel_dir, "memory_symbols.ld.in")
     if os.path.exists(mem_sym):
         out.append(read_fragment(mem_sym))
+
+    # Optional chip ROM / PROVIDE fragment (e.g. ESP32-P4 esp_rom *.ld INCLUDE)
+    rom_ld = os.path.join(args.chip_dir, "rom.ld")
+    if os.path.exists(rom_ld):
+        out.append(read_fragment(rom_ld))
 
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
     with open(args.output, "w", encoding="utf-8") as f:
