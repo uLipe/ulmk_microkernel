@@ -37,6 +37,7 @@ KERNEL_DEFAULTS = {
     "ULMK_CONFIG_BOARD_IRQ_CLAIM":  0,    # 1 = board sees IRQs before dispatch
     "ULMK_CONFIG_BOARD_PMP_EXTRA":  0,    # 1 = board adds protection entries
     "ULMK_CONFIG_FPU":              1,    # 1 = hard-float ABI + FP context
+    "ULMK_CONFIG_SIM_EXIT":         0,    # 1 = board can stop the simulator
 }
 
 # Inclusive range checks for numeric policy symbols.
@@ -51,6 +52,7 @@ KERNEL_RANGES = {
     "ULMK_CONFIG_BOARD_IRQ_CLAIM":  (0, 1),
     "ULMK_CONFIG_BOARD_PMP_EXTRA":  (0, 1),
     "ULMK_CONFIG_FPU":              (0, 1),
+    "ULMK_CONFIG_SIM_EXIT":         (0, 1),
 }
 
 

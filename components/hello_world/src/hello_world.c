@@ -26,12 +26,25 @@
  * component. */
 void board_console_puts(const char *s);
 
+#define HELLO_DONE_BIT	(1u << 0)
+
+static ULMK_PRIVATE ulmk_notif_t g_done;
+
 static void hello_entry(void *arg)
 {
 	(void)arg;
 
 	board_console_puts("ulmk: hello from userspace — hello world!\n");
+	(void)ulmk_notif_signal(g_done, HELLO_DONE_BIT);
 	ulmk_thread_exit();
+}
+
+void hello_world_wait(void)
+{
+	uint32_t bits;
+
+	if (g_done != ULMK_NOTIF_INVALID)
+		(void)ulmk_notif_wait(g_done, HELLO_DONE_BIT, &bits);
 }
 
 ulmk_tid_t hello_world_init(const ulmk_boot_info_t *info)
@@ -45,6 +58,8 @@ ulmk_tid_t hello_world_init(const ulmk_boot_info_t *info)
 	if (done)
 		return ULMK_TID_INVALID;
 	done = 1;
+
+	g_done = ulmk_notif_create();
 
 	attr.name       = "hello";
 	attr.entry      = hello_entry;

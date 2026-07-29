@@ -21,6 +21,11 @@ set(ULMK_CONFIG_BOARD_IRQ_CLAIM  0  CACHE STRING
 	"Offer each IRQ to the board before generic dispatch (0=off, 1=on)")
 set(ULMK_CONFIG_BOARD_PMP_EXTRA  0  CACHE STRING
 	"Board adds its own memory-protection entries (0=off, 1=on)")
+# Off by default: silicon has nowhere to exit to.  The QEMU boards turn it on
+# from their board.cmake, which the toolchain file pulls in ahead of this file,
+# so their value is already in the cache when this set() runs.
+set(ULMK_CONFIG_SIM_EXIT         0  CACHE STRING
+	"Board can stop the simulator, so demos end instead of idling (0=off, 1=on)")
 # Also defaulted in cmake/arm_fpu.cmake, which runs first on Cortex-M because
 # board.cmake is included from the toolchain file.  Keep the two in step.
 set(ULMK_CONFIG_FPU              1  CACHE STRING

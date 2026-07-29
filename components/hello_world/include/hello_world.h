@@ -22,4 +22,11 @@
  */
 ulmk_tid_t hello_world_init(const ulmk_boot_info_t *info);
 
+/*
+ * Block until the hello task has printed.  The caller creates the task and
+ * then has nothing left to do, so without this it would race ahead and end
+ * the run before the greeting reaches the console.
+ */
+void hello_world_wait(void);
+
 #endif /* HELLO_WORLD_H */

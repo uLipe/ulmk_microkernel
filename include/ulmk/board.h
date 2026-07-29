@@ -24,6 +24,7 @@
  *   ULMK_CONFIG_BOARD_IRQ_CTRL    routing stage ahead of the CPU controller
  *   ULMK_CONFIG_BOARD_IRQ_CLAIM   board claims IRQs before generic dispatch
  *   ULMK_CONFIG_BOARD_PMP_EXTRA   board adds memory-protection entries
+ *   ULMK_CONFIG_SIM_EXIT          board can stop the simulator it runs on
  *   ULMK_ARCH_HAS_CACHE           board owns cache range maintenance
  *   !ULMK_ARCH_HAVE_CLINT         board owns the tick timer
  */
@@ -64,6 +65,19 @@ bool ulmk_board_irq_claim(uint32_t irq);
  * rebuilds the protection state, so it must be idempotent.
  */
 void ulmk_board_pmp_extra(void);
+#endif
+
+#if ULMK_CONFIG_SIM_EXIT
+/*
+ * Stop the simulator and hand it @code as the process exit status.
+ *
+ * Unlike the hooks above this one runs in userspace, at driver privilege, and
+ * so lives in the board archive rather than the kernel's: a demo that has said
+ * what it came to say calls it instead of falling through to the idle thread,
+ * which on a simulator means hanging until something outside kills it.  Real
+ * silicon has nowhere to exit to and leaves the feature off.
+ */
+__attribute__((noreturn)) void ulmk_board_sim_exit(int code);
 #endif
 
 /*

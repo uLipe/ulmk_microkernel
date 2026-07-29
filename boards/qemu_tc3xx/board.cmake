@@ -23,6 +23,11 @@ set(ULMK_BOARD_SOURCES
     board_console.c
     board_timer.c
     board_services.c
+    board_sim_exit.c
 )
 
 set(UL_BOARD_QEMU_MACHINE "KIT_AURIX_TC397B_TRB")
+
+# Demos call ulmk_board_sim_exit() to end the run (board_sim_exit.c).
+set(ULMK_CONFIG_SIM_EXIT 1 CACHE STRING
+	"Board can stop the simulator; demos end instead of idling")

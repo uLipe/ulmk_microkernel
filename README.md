@@ -176,6 +176,8 @@ ulmk: switching to root thread
 ulmk: hello from userspace — hello world!
 ```
 
+`hello_world` then stops the simulator, so QEMU exits 0 by itself.
+
 Expected output with `ping_pong`:
 
 ```
