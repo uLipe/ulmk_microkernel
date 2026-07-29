@@ -17,6 +17,7 @@
 #include <string.h>
 #include <ulmk/microkernel.h>
 #include <ulmk/config.h>
+#include <ulmk/board.h>
 #include <kernel/include/ulmk_irq_internal.h>
 #include <kernel/include/ulmk_notif_internal.h>
 #include <kernel/include/ulmk_mem_internal.h>
@@ -32,6 +33,29 @@
  * ========================================================================= */
 
 static ulmk_irq_binding_t UL_KERNEL_BSS irq_table[ULMK_CONFIG_MAX_IRQ_BINDINGS];
+
+/* =========================================================================
+ * Board interrupt controller — optional routing stage ahead of the CPU's
+ * own controller.  See include/ulmk/board.h.
+ * ========================================================================= */
+
+#if ULMK_CONFIG_BOARD_IRQ_CTRL
+
+/*
+ * No stub here on purpose: a board that turns this option on must define both
+ * hooks, and a missing one has to fail the link.  A weak no-op would be picked
+ * up ahead of a definition arriving later in the archive order, leaving the
+ * routing silently undone.
+ */
+#define board_irq_connect(srpn)		ulmk_board_irq_connect(srpn)
+#define board_irq_disconnect(srpn)	ulmk_board_irq_disconnect(srpn)
+
+#else /* board has no routing stage: keep it out of the IRQ path entirely */
+
+#define board_irq_connect(srpn)		((void)0)
+#define board_irq_disconnect(srpn)	((void)0)
+
+#endif
 
 void ulmk_irq_table_init(void)
 {
@@ -136,6 +160,7 @@ static uint32_t irq_attach_common(uint32_t srpn, uint32_t fn_addr,
 	irq_table[ret].owner       = cur;
 	irq_table[ret].owned_notif = true;
 
+	board_irq_connect((uint8_t)srpn);
 	if (have_src)
 		ulmk_arch_irq_src_register((uint8_t)srpn, src_reg);
 	else
@@ -168,6 +193,7 @@ uint32_t ulmk_kern_irq_bind(uint32_t srpn, uint32_t notif_id, uint32_t bit)
 	if (ret < 0)
 		return (uint32_t)(int32_t)ULMK_ENOSPC;
 
+	board_irq_connect((uint8_t)srpn);
 	ulmk_arch_irq_src_configure((uint8_t)srpn, (uint8_t)srpn, 0u);
 	return 0u;
 }
@@ -192,6 +218,7 @@ uint32_t ulmk_kern_irq_bind_hw(uint32_t srpn, uint32_t notif_id,
 	if (ret < 0)
 		return (uint32_t)(int32_t)ULMK_ENOSPC;
 
+	board_irq_connect((uint8_t)srpn);
 	ulmk_arch_irq_src_register((uint8_t)srpn, src_reg);
 	return 0u;
 }
@@ -227,6 +254,7 @@ uint32_t ulmk_kern_irq_detach(uint32_t srpn)
 	b->enabled = false;
 	ulmk_arch_irq_src_disable((uint8_t)srpn);
 	ulmk_arch_irq_src_ack((uint8_t)srpn);
+	board_irq_disconnect((uint8_t)srpn);
 
 	owned = b->owned_notif;
 	nid   = b->notif ? b->notif->id : ULMK_NOTIF_INVALID;
@@ -284,6 +312,13 @@ uint32_t ulmk_kern_irq_ack(uint32_t srpn)
 		return (uint32_t)(int32_t)ULMK_EINVAL;
 
 	ulmk_arch_irq_src_ack((uint8_t)srpn);
+	/*
+	 * Undoes the mask applied when the notification was signalled; see
+	 * ulmk_kern_irq_dispatch().  Enabling an already-unmasked source is a
+	 * no-op, so drivers that ack outside a wait are unaffected.
+	 */
+	if (b->enabled && !b->attach_fn)
+		ulmk_arch_irq_src_enable((uint8_t)srpn);
 	return 0u;
 }
 
@@ -361,5 +396,12 @@ void ulmk_kern_irq_dispatch(uint8_t srpn)
 		return;
 	}
 
+	/*
+	 * Threaded delivery: the condition that raised the line is cleared by
+	 * the server thread, not here, so a level-triggered source would keep
+	 * re-entering this handler and the thread would never get to run.
+	 * Mask it and let ulmk_irq_ack() from the server reopen it.
+	 */
+	ulmk_arch_irq_src_disable(srpn);
 	notif_signal_impl(b->notif->id, 1u << b->bit);
 }
