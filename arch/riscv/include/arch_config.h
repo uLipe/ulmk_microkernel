@@ -20,9 +20,17 @@
 #define ULMK_ARCH_HAVE_FPU	0
 #endif
 
-/* No managed L1 D-cache ops on this port yet — dcache syscalls → ENOTSUP. */
+/*
+ * D-cache maintenance is SoC-specific on RISC-V (no standard CSR recipe),
+ * so the board opts in and supplies the ulmk_board_dcache_* primitives.
+ * Kernel syscalls return ULMK_ENOTSUP when this is 0.
+ */
 #ifndef ULMK_ARCH_HAS_CACHE
+#ifdef ULMK_BOARD_ENABLE_CPU_CACHE
+#define ULMK_ARCH_HAS_CACHE	ULMK_BOARD_ENABLE_CPU_CACHE
+#else
 #define ULMK_ARCH_HAS_CACHE	0
+#endif
 #endif
 
 #ifndef ULMK_ARCH_PMP_NUM
@@ -45,6 +53,19 @@
 #define ULMK_ARCH_PMP_DYNAMIC_BASE	6
 #endif
 
+#ifndef ULMK_ARCH_PMP_PRESERVE_BOOT
+#define ULMK_ARCH_PMP_PRESERVE_BOOT	0
+#endif
+
+/* High slots reserved for on-demand map/unmap (ESP32-P4 has 16). */
+#if ULMK_ARCH_PMP_NUM >= 16
+#define ULMK_ARCH_PMP_TEMP0		14
+#define ULMK_ARCH_PMP_TEMP1		15
+#else
+#define ULMK_ARCH_PMP_TEMP0		(ULMK_ARCH_PMP_NUM > 0 ? ULMK_ARCH_PMP_NUM - 1 : 0)
+#define ULMK_ARCH_PMP_TEMP1		ULMK_ARCH_PMP_TEMP0
+#endif
+
 #define ULMK_ARCH_PRS_KERNEL	0u
 #define ULMK_ARCH_PRS_USER	1u
 
@@ -62,6 +83,14 @@
 
 #ifndef ULMK_ARCH_HAVE_CLIC
 #define ULMK_ARCH_HAVE_CLIC	0
+#endif
+
+/*
+ * Espressif CLIC: mtvec mode=3 + MTVT jump table (interrupt_id 0..47).
+ * Leave 0 for QEMU/direct-mode CLIC experiments.
+ */
+#ifndef ULMK_ARCH_CLIC_VECTORED
+#define ULMK_ARCH_CLIC_VECTORED	0
 #endif
 
 #if !ULMK_ARCH_HAVE_CLINT && !ULMK_ARCH_HAVE_PLIC && !ULMK_ARCH_HAVE_CLIC

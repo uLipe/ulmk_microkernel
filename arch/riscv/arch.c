@@ -9,10 +9,12 @@
 #include <ulmk/microkernel.h>
 #include <ulmk/config.h>
 #include <ulmk_arch.h>
+#include <ulmk/board.h>
 #include "irq_internal.h"
 
-#define TF_SIZE		144u
+#define TF_SIZE		148u
 #define TF_RA		0u
+#define TF_SP		4u
 #define TF_S0		28u
 #define TF_S1		32u
 #define TF_A0		36u
@@ -22,9 +24,11 @@
 #define TF_A7		64u
 #define TF_MEPC		108u
 #define TF_MSTATUS	112u
+#define TF_MCAUSE	132u
 
 #define MCAUSE_INT_BIT	(1u << 31)
-#define MCAUSE_EC_MASK	0x7FFFFFFFu
+/* CLIC ports may set sticky high bits; exception code is mcause[11:0]. */
+#define MCAUSE_EC_MASK	0xFFFu
 
 #define MCAUSE_ECALL_U	8u
 #define MCAUSE_ECALL_M	11u
@@ -36,6 +40,7 @@
 #define PMP_R	0x01u
 #define PMP_W	0x02u
 #define PMP_X	0x04u
+#define PMP_A_TOR	0x08u
 #define PMP_A_NAPOT	0x18u
 
 struct riscv_trap_frame {
@@ -102,6 +107,32 @@ static inline void write_pmpcfg1(uint32_t val)
 	__asm__ volatile("csrw pmpcfg1, %0" :: "r"(val));
 }
 
+static inline uint32_t read_pmpcfg2(void)
+{
+	uint32_t val;
+
+	__asm__ volatile("csrr %0, pmpcfg2" : "=r"(val));
+	return val;
+}
+
+static inline void write_pmpcfg2(uint32_t val)
+{
+	__asm__ volatile("csrw pmpcfg2, %0" :: "r"(val));
+}
+
+static inline uint32_t read_pmpcfg3(void)
+{
+	uint32_t val;
+
+	__asm__ volatile("csrr %0, pmpcfg3" : "=r"(val));
+	return val;
+}
+
+static inline void write_pmpcfg3(uint32_t val)
+{
+	__asm__ volatile("csrw pmpcfg3, %0" :: "r"(val));
+}
+
 static void pmp_write_addr(uint8_t idx, uint32_t val)
 {
 	switch (idx) {
@@ -113,6 +144,14 @@ static void pmp_write_addr(uint8_t idx, uint32_t val)
 	case 5: __asm__ volatile("csrw pmpaddr5, %0" :: "r"(val)); break;
 	case 6: __asm__ volatile("csrw pmpaddr6, %0" :: "r"(val)); break;
 	case 7: __asm__ volatile("csrw pmpaddr7, %0" :: "r"(val)); break;
+	case 8: __asm__ volatile("csrw pmpaddr8, %0" :: "r"(val)); break;
+	case 9: __asm__ volatile("csrw pmpaddr9, %0" :: "r"(val)); break;
+	case 10: __asm__ volatile("csrw pmpaddr10, %0" :: "r"(val)); break;
+	case 11: __asm__ volatile("csrw pmpaddr11, %0" :: "r"(val)); break;
+	case 12: __asm__ volatile("csrw pmpaddr12, %0" :: "r"(val)); break;
+	case 13: __asm__ volatile("csrw pmpaddr13, %0" :: "r"(val)); break;
+	case 14: __asm__ volatile("csrw pmpaddr14, %0" :: "r"(val)); break;
+	case 15: __asm__ volatile("csrw pmpaddr15, %0" :: "r"(val)); break;
 	default: break;
 	}
 }
@@ -125,30 +164,73 @@ static inline uint32_t pmp_addr_encode(uintptr_t addr)
 static void pmp_write_cfg(uint8_t idx, uint8_t cfg)
 {
 	uint32_t v;
+	uint8_t  byte;
 
-	if (idx >= ULMK_ARCH_PMP_NUM)
+	if (idx >= ULMK_ARCH_PMP_NUM && ULMK_ARCH_PMP_NUM != 0u)
+		return;
+	if (idx >= 16u)
 		return;
 
+	byte = idx & 3u;
 	if (idx < 4u) {
 		v = read_pmpcfg0();
-		v = (v & ~(0xFFu << (idx * 8u))) | ((uint32_t)cfg << (idx * 8u));
+		v = (v & ~(0xFFu << (byte * 8u))) |
+		    ((uint32_t)cfg << (byte * 8u));
 		write_pmpcfg0(v);
-		return;
+	} else if (idx < 8u) {
+		v = read_pmpcfg1();
+		v = (v & ~(0xFFu << (byte * 8u))) |
+		    ((uint32_t)cfg << (byte * 8u));
+		write_pmpcfg1(v);
+	} else if (idx < 12u) {
+		v = read_pmpcfg2();
+		v = (v & ~(0xFFu << (byte * 8u))) |
+		    ((uint32_t)cfg << (byte * 8u));
+		write_pmpcfg2(v);
+	} else {
+		v = read_pmpcfg3();
+		v = (v & ~(0xFFu << (byte * 8u))) |
+		    ((uint32_t)cfg << (byte * 8u));
+		write_pmpcfg3(v);
 	}
-
-	v = read_pmpcfg1();
-	idx -= 4u;
-	v = (v & ~(0xFFu << (idx * 8u))) | ((uint32_t)cfg << (idx * 8u));
-	write_pmpcfg1(v);
 }
 
 static void pmp_clear_all(void)
 {
 	uint8_t i;
+	uint8_t n = ULMK_ARCH_PMP_NUM;
+	uint32_t cfg;
 
-	for (i = 0u; i < ULMK_ARCH_PMP_NUM; i++) {
-		pmp_write_addr(i, 0u);
+	if (n == 0u)
+		n = 16u;
+
+	/*
+	 * Do not touch mseccfg (may be unimplemented on some SoCs).
+	 * Skip Locked entries — boot firmware owns those.
+	 */
+	for (i = 0u; i < n && i < 16u; i++) {
+		cfg = 0u;
+		if (i < 4u) {
+			uint32_t v;
+			__asm__ volatile("csrr %0, pmpcfg0" : "=r"(v));
+			cfg = (v >> ((i & 3u) * 8u)) & 0xFFu;
+		} else if (i < 8u) {
+			uint32_t v;
+			__asm__ volatile("csrr %0, pmpcfg1" : "=r"(v));
+			cfg = (v >> ((i & 3u) * 8u)) & 0xFFu;
+		} else if (i < 12u) {
+			uint32_t v;
+			__asm__ volatile("csrr %0, pmpcfg2" : "=r"(v));
+			cfg = (v >> ((i & 3u) * 8u)) & 0xFFu;
+		} else {
+			uint32_t v;
+			__asm__ volatile("csrr %0, pmpcfg3" : "=r"(v));
+			cfg = (v >> ((i & 3u) * 8u)) & 0xFFu;
+		}
+		if ((cfg & 0x80u) != 0u) /* PMP_L */
+			continue;
 		pmp_write_cfg(i, 0u);
+		pmp_write_addr(i, 0u);
 	}
 }
 
@@ -166,26 +248,114 @@ static uintptr_t napot_round_size(uintptr_t size)
 static void pmp_set_napot(uint8_t idx, uintptr_t base, uintptr_t size, uint8_t perm)
 {
 	uintptr_t napot;
+	uintptr_t hi;
+	uintptr_t aligned;
 	uint32_t  addr;
 
-	if (idx >= ULMK_ARCH_PMP_NUM || size == 0u)
+	if (idx >= 16u || size == 0u)
+		return;
+	if (ULMK_ARCH_PMP_NUM != 0u && idx >= ULMK_ARCH_PMP_NUM)
 		return;
 
+	hi = base + size;
 	napot = napot_round_size(size);
-	base &= ~(napot - 1u);
+	/*
+	 * Aligning base down can push the top of the NAPOT window below
+	 * @p hi — grow until [aligned, aligned+napot) covers the range.
+	 */
+	for (;;) {
+		aligned = base & ~(napot - 1u);
+		if (aligned + napot >= hi)
+			break;
+		if (napot >= (uintptr_t)0x80000000u)
+			return;
+		napot <<= 1u;
+	}
+	base = aligned;
 	addr = pmp_addr_encode(base) | (pmp_addr_encode(napot) - 1u);
+	pmp_write_cfg(idx, 0u);
 	pmp_write_addr(idx, addr);
 	pmp_write_cfg(idx, perm | PMP_A_NAPOT);
 }
 
-static void pmp_set_tor(uint8_t idx, uintptr_t lo, uintptr_t hi, uint8_t perm)
+/*
+ * TOR on slot @p idx: range [lo, hi).  Slot idx-1 holds the low bound
+ * (OFF or previous TOR).  For idx==0, low bound is 0.
+ */
+static void __attribute__((unused))
+pmp_set_tor(uint8_t idx, uintptr_t lo, uintptr_t hi, uint8_t perm)
 {
-	uintptr_t size;
-
-	if (hi <= lo)
+	if (idx >= 16u || hi <= lo)
 		return;
-	size = hi - lo;
-	pmp_set_napot(idx, lo, size, perm);
+	if (ULMK_ARCH_PMP_NUM != 0u && idx >= ULMK_ARCH_PMP_NUM)
+		return;
+
+	if (idx == 0u) {
+		pmp_write_cfg(0u, 0u);
+		pmp_write_addr(0u, pmp_addr_encode(hi));
+		pmp_write_cfg(0u, perm | PMP_A_TOR);
+		return;
+	}
+
+	pmp_write_cfg(idx - 1u, 0u);
+	pmp_write_addr(idx - 1u, pmp_addr_encode(lo));
+	pmp_write_cfg(idx, 0u);
+	pmp_write_addr(idx, pmp_addr_encode(hi));
+	pmp_write_cfg(idx, perm | PMP_A_TOR);
+}
+
+static uint8_t perms_to_pmp(uint32_t perms)
+{
+	uint8_t p = 0u;
+
+	if (perms & ULMK_PERM_READ)
+		p |= PMP_R;
+	if (perms & ULMK_PERM_WRITE)
+		p |= PMP_W;
+	if (perms & ULMK_PERM_EXEC)
+		p |= PMP_X;
+	return p;
+}
+
+int ulmk_arch_pmp_set_napot(uint8_t slot, uintptr_t base, size_t size,
+			    uint32_t perms)
+{
+	if (ULMK_ARCH_PMP_NUM == 0u)
+		return ULMK_ENOTSUP;
+	if (slot >= ULMK_ARCH_PMP_NUM || size == 0u)
+		return ULMK_EINVAL;
+	pmp_set_napot(slot, base, size, perms_to_pmp(perms));
+	return ULMK_OK;
+}
+
+int ulmk_arch_pmp_map_temp(uintptr_t base, size_t size, uint32_t perms)
+{
+	static uint8_t next;
+
+	if (ULMK_ARCH_PMP_NUM == 0u)
+		return -1;
+	if (size == 0u)
+		return -1;
+
+	if (next == 0u)
+		next = (uint8_t)ULMK_ARCH_PMP_TEMP0;
+	else if (next == (uint8_t)ULMK_ARCH_PMP_TEMP0)
+		next = (uint8_t)ULMK_ARCH_PMP_TEMP1;
+	else
+		next = (uint8_t)ULMK_ARCH_PMP_TEMP0;
+
+	pmp_set_napot(next, base, size, perms_to_pmp(perms));
+	return (int)next;
+}
+
+void ulmk_arch_pmp_unmap_temp(int slot)
+{
+	if (slot < 0 || ULMK_ARCH_PMP_NUM == 0u)
+		return;
+	if ((uint8_t)slot >= ULMK_ARCH_PMP_NUM)
+		return;
+	pmp_write_cfg((uint8_t)slot, 0u);
+	pmp_write_addr((uint8_t)slot, 0u);
 }
 
 static uint32_t user_mstatus_init(void)
@@ -332,6 +502,17 @@ void ulmk_arch_sched_switch(ulmk_arch_ctx_t *from, const ulmk_arch_ctx_t *to,
  * PMP (ulmk_arch_mpu_* API)
  * ========================================================================= */
 
+/*
+ * Board-supplied protection entries.  Reapplied on every rebuild of the
+ * protection state, so the board's implementation has to be idempotent.
+ */
+static inline void pmp_board_extra(void)
+{
+#if ULMK_CONFIG_BOARD_PMP_EXTRA
+	ulmk_board_pmp_extra();
+#endif
+}
+
 static void pmp_kernel_layout(void)
 {
 	uintptr_t kexec_lo;
@@ -389,6 +570,8 @@ static void pmp_kernel_layout(void)
 		pmp_set_napot(ULMK_ARCH_PMP_MMIO, mmio_lo, mmio_hi - mmio_lo,
 			      PMP_R | PMP_W);
 
+	pmp_board_extra();
+
 	(void)kexec_lo;
 }
 
@@ -432,16 +615,23 @@ static void pmp_user_layout(const ulmk_arch_region_t *regions, uint8_t count)
 			      PMP_R | PMP_W);
 
 	/*
-	 * STACK sits inside the static URAM NAPOT window — skip it.  Remaining
-	 * dynamic entries (heap / shared / spare) use TOR slots.
+	 * STACK sits inside the static URAM NAPOT window — skip it.
+	 * Dynamic domain grants use NAPOT on free slots (leave TEMP0/1 alone).
 	 */
-	slot = ULMK_ARCH_PMP_USER_BASE;
+	slot = ULMK_ARCH_PMP_DYNAMIC_BASE;
 	if (regions && count > 0u) {
 		for (i = 0u; i < count && slot < ULMK_ARCH_PMP_NUM; i++) {
 			uint8_t perm = 0u;
 
 			if (regions[i].type == ULMK_REGION_STACK)
 				continue;
+			if (slot == 11u || slot == 12u || slot == 13u ||
+			    slot == (uint8_t)ULMK_ARCH_PMP_TEMP0 ||
+			    slot == (uint8_t)ULMK_ARCH_PMP_TEMP1) {
+				slot++;
+				i--;
+				continue;
+			}
 
 			if (regions[i].perms & ULMK_PERM_READ)
 				perm |= PMP_R;
@@ -450,16 +640,66 @@ static void pmp_user_layout(const ulmk_arch_region_t *regions, uint8_t count)
 			if (regions[i].perms & ULMK_PERM_EXEC)
 				perm |= PMP_X;
 
-			pmp_set_tor(slot, regions[i].base,
-				    regions[i].base + regions[i].size, perm);
+			pmp_set_napot(slot, regions[i].base, regions[i].size,
+				      perm);
 			slot++;
 		}
 	}
+
+	pmp_board_extra();
+}
+
+/*
+ * Overlay domain grants on free high slots without wiping boot PMP.
+ */
+static void pmp_user_overlay(const ulmk_arch_region_t *regions, uint8_t count)
+{
+	uint8_t slot;
+	uint8_t i;
+
+	slot = ULMK_ARCH_PMP_DYNAMIC_BASE;
+	if (regions && count > 0u) {
+		for (i = 0u; i < count && slot < ULMK_ARCH_PMP_NUM; i++) {
+			uint8_t perm = 0u;
+
+			if (regions[i].type == ULMK_REGION_STACK)
+				continue;
+			if (slot == 11u || slot == 12u || slot == 13u ||
+			    slot == (uint8_t)ULMK_ARCH_PMP_TEMP0 ||
+			    slot == (uint8_t)ULMK_ARCH_PMP_TEMP1) {
+				slot++;
+				i--;
+				continue;
+			}
+
+			if (regions[i].perms & ULMK_PERM_READ)
+				perm |= PMP_R;
+			if (regions[i].perms & ULMK_PERM_WRITE)
+				perm |= PMP_W;
+			if (regions[i].perms & ULMK_PERM_EXEC)
+				perm |= PMP_X;
+
+			pmp_set_napot(slot, regions[i].base, regions[i].size,
+				      perm);
+			slot++;
+		}
+	}
+	pmp_board_extra();
 }
 
 void ulmk_arch_mpu_init(void)
 {
+	if (ULMK_ARCH_PMP_NUM == 0u)
+		return;
+#if ULMK_ARCH_PMP_PRESERVE_BOOT
+	/*
+	 * Boot locked entries stay.  Only add board extras (LP/PSRAM) on
+	 * free high slots — full replace needs mseccfg.RLB (SoC-dependent).
+	 */
+	pmp_board_extra();
+#else
 	pmp_kernel_layout();
+#endif
 }
 
 void ulmk_arch_mpu_enable(void)
@@ -468,6 +708,8 @@ void ulmk_arch_mpu_enable(void)
 
 void ulmk_arch_mpu_disable(void)
 {
+	if (ULMK_ARCH_PMP_NUM == 0u)
+		return;
 	pmp_clear_all();
 }
 
@@ -520,6 +762,13 @@ void ulmk_arch_mpu_switch(const ulmk_arch_region_t *regions, uint8_t count,
 	uint32_t              cpu;
 	uint8_t               eff;
 
+	if (ULMK_ARCH_PMP_NUM == 0u) {
+		(void)regions;
+		(void)count;
+		(void)prs;
+		return;
+	}
+
 	cpu = ulmk_arch_cpu_id();
 	if (cpu >= (uint32_t)ULMK_ARCH_NUM_CPU)
 		cpu = 0u;
@@ -545,10 +794,19 @@ void ulmk_arch_mpu_switch(const ulmk_arch_region_t *regions, uint8_t count,
 	}
 #endif
 
-	if (prs == ULMK_ARCH_PRS_KERNEL)
+	if (prs == ULMK_ARCH_PRS_KERNEL) {
+#if ULMK_ARCH_PMP_PRESERVE_BOOT
+		pmp_board_extra();
+#else
 		pmp_kernel_layout();
-	else
+#endif
+	} else {
+#if ULMK_ARCH_PMP_PRESERVE_BOOT
+		pmp_user_overlay(regions, count);
+#else
 		pmp_user_layout(regions, count);
+#endif
+	}
 
 	c->prs     = prs;
 	c->regions = regions;
@@ -722,6 +980,19 @@ void ulmk_arch_trap_entry(uint8_t trap_class, uint8_t tin)
 		__asm__ volatile("csrr %0, mtval" : "=r"(mtval));
 		dump_hex8(mtval);
 	}
+	{
+		const uint32_t *tf;
+
+		tf = (const uint32_t *)g_trap_sp[0];
+		if (tf) {
+			dump_puts(" ra=");
+			dump_hex8(tf[TF_RA / 4u]);
+			dump_puts(" sp=");
+			dump_hex8(tf[TF_SP / 4u]);
+			dump_puts(" mepc=");
+			dump_hex8(tf[TF_MEPC / 4u]);
+		}
+	}
 	dump_puts("\n");
 	ulmk_arch_trap_dump(trap_class, tin);
 
@@ -761,8 +1032,10 @@ void ulmk_arch_init(ulmk_boot_info_t *info)
 }
 
 /* =========================================================================
- * Kernel tick — CLINT mtimecmp (per-hart)
+ * Kernel tick — CLINT mtimecmp (per-hart), or board SYSTIMER when !CLINT
  * ========================================================================= */
+
+#if ULMK_ARCH_HAVE_CLINT
 
 static uint64_t g_tick_period;
 
@@ -816,12 +1089,32 @@ void ulmk_arch_tick_ack(void)
 	clint_mtimecmp_write(hart, next);
 }
 
+#else /* !ULMK_ARCH_HAVE_CLINT — board provides SYSTIMER / similar */
+
+void ulmk_arch_tick_init(uint32_t tick_hz)
+{
+	ulmk_board_tick_init(tick_hz);
+}
+
+void ulmk_arch_tick_ack(void)
+{
+	ulmk_board_tick_ack();
+#if ULMK_ARCH_HAVE_CLIC
+	/*
+	 * Lower MIL before sched_dispatch inside ulmk_kern_timer_tick so a
+	 * preempting switch cannot abandon mret with mintstatus elevated.
+	 */
+	riscv_clic_drop_mil();
+#endif
+}
+
+#endif /* ULMK_ARCH_HAVE_CLINT */
+
 uint32_t ulmk_arch_timer_wheel_cpu(void)
 {
 	return ulmk_arch_cpu_id();
 }
 
-/* Cache stubs — ULMK_ARCH_HAS_CACHE=0; syscalls return ENOTSUP. */
 void ulmk_arch_cache_enable(void)
 {
 }
@@ -843,20 +1136,38 @@ void ulmk_arch_icache_invalidate_all(void)
 }
 
 
+/*
+ * Range maintenance is delegated to the board: RISC-V has no architectural
+ * cache-op CSRs, so the SoC (custom sync engine, ROM routine, …) owns the
+ * recipe.  Boards that declare no cache get no-ops here.
+ */
 void ulmk_arch_dcache_clean(void *addr, size_t len)
 {
+#if ULMK_ARCH_HAS_CACHE
+	ulmk_board_dcache_clean(addr, len);
+#else
 	(void)addr;
 	(void)len;
+#endif
 }
 
 void ulmk_arch_dcache_invalidate(void *addr, size_t len)
 {
+#if ULMK_ARCH_HAS_CACHE
+	ulmk_board_dcache_invalidate(addr, len);
+#else
 	(void)addr;
 	(void)len;
+#endif
 }
 
 void ulmk_arch_dcache_clean_invalidate(void *addr, size_t len)
 {
+#if ULMK_ARCH_HAS_CACHE
+	ulmk_board_dcache_clean(addr, len);
+	ulmk_board_dcache_invalidate(addr, len);
+#else
 	(void)addr;
 	(void)len;
+#endif
 }

@@ -85,7 +85,10 @@ void ulmk_arch_sched_switch(ulmk_arch_ctx_t *from, const ulmk_arch_ctx_t *to,
 
 void ulmk_arch_mpu_init(void);
 
-/* Cache maintenance — no-op stubs (API parity with ARM). */
+/*
+ * Cache maintenance.  Range ops forward to the board primitives declared in
+ * <ulmk/board.h>, which the SoC must supply when ULMK_ARCH_HAS_CACHE is set.
+ */
 void ulmk_arch_cache_enable(void);
 void ulmk_arch_dcache_clean_all(void);
 void ulmk_arch_dcache_invalidate_all(void);
@@ -101,6 +104,15 @@ void ulmk_arch_mpu_configure(uint8_t prs, const ulmk_arch_region_t *regions,
 void ulmk_arch_mpu_switch(const ulmk_arch_region_t *regions, uint8_t count,
 			uint8_t prs);
 bool ulmk_arch_mpu_addr_permitted(uintptr_t addr, size_t size, uint32_t perms);
+
+/*
+ * Temporary NAPOT slots (high indices) for boot/config windows
+ * (MSPI bring-up, ROM helpers). Map → use → unmap.
+ */
+int ulmk_arch_pmp_set_napot(uint8_t slot, uintptr_t base, size_t size,
+			    uint32_t perms);
+int ulmk_arch_pmp_map_temp(uintptr_t base, size_t size, uint32_t perms);
+void ulmk_arch_pmp_unmap_temp(int slot);
 
 void ulmk_arch_irq_vectors_init(uintptr_t btv, uintptr_t biv, uintptr_t isp_top);
 void ulmk_arch_irq_src_configure(uint8_t srpn, uint8_t priority, uint8_t cpu_id);
