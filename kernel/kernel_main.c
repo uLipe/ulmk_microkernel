@@ -186,6 +186,13 @@ void ulmk_kern_trap_recoverable(void)
 		ulmk_sched_resched();
 	}
 
+	/*
+	 * Leave the dead thread's trap frame via coop switch.  Without
+	 * this the hart spins here and never runs other threads (breaks
+	 * fault_policy / PMP_NEG HIL).
+	 */
+	ulmk_kern_sched_dispatch(false);
+
 	for (;;)
 		;
 }
