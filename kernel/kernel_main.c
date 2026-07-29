@@ -236,7 +236,7 @@ static uint8_t     idle_stack_g[ULMK_NR_CPUS][ULMK_IDLE_STACK_SIZE]
 	__attribute__((aligned(8))) UL_KERNEL_BSS;
 
 static ulmk_thread_t root_thread_g   UL_KERNEL_BSS;
-static uint8_t     root_stack_g[4096]
+static uint8_t     root_stack_g[ULMK_CONFIG_ROOT_STACK_SIZE]
 	__attribute__((aligned(8), section(".user_bss")));
 
 #if ULMK_CONFIG_ENABLE_SMP
