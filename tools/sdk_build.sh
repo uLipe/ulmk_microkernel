@@ -14,7 +14,9 @@
 #   include/ulmk/*.h                       public microkernel API
 #   include/ulmk_syscall_abi.h             arch-provided ABI (redirected to by
 #                                          <ulmk/syscall_abi.h>)
-#   include/board/*.h                      public board API (no *internal* headers)
+#   include/board/*.h                      public board API: chip headers plus
+#                                          every drivers/*/include header
+#                                          (no *internal* headers)
 #
 # Must run inside the dev container (needs cmake, ninja and the cross toolchains).
 
@@ -131,6 +133,17 @@ for h in "$CHIP_DIR"/*.h; do
 	[ -f "$h" ] && cp "$h" "$OUT_DIR/include/board/"
 done
 
+# Board driver APIs.  The drivers are compiled into the board archive, so
+# without their headers a consumer links against symbols it cannot declare.
+# Only drivers/<name>/include ships; drivers/<name>/src is the private side.
+DRIVER_HDRS=0
+for h in "$CHIP_DIR"/drivers/*/include/*.h; do
+	[ -f "$h" ] || continue
+	case "$(basename "$h")" in *internal*) continue;; esac
+	cp "$h" "$OUT_DIR/include/board/"
+	DRIVER_HDRS=$((DRIVER_HDRS + 1))
+done
+
 echo "--- verify SDK ---"
 ar t "$OUT_DIR/lib/$KERNEL_A" >/dev/null
 ar t "$OUT_DIR/lib/$BOARD_A" >/dev/null
@@ -139,7 +152,15 @@ grep -q "$KERNEL_A" "$OUT_DIR/linker/$LD"
 test -f "$OUT_DIR/include/ulmk/microkernel.h"
 test -f "$OUT_DIR/include/ulmk_syscall_abi.h"
 
+# A board that compiles drivers into the archive has to publish their API.
+DRIVER_DIRS=$(find "$CHIP_DIR/drivers" -maxdepth 2 -type d -name include \
+	2>/dev/null | wc -l)
+if [ "$DRIVER_DIRS" -gt 0 ] && [ "$DRIVER_HDRS" -eq 0 ]; then
+	echo "error: board has $DRIVER_DIRS driver include dirs, none shipped" >&2
+	exit 1
+fi
+
 echo "SDK ready → $OUT_DIR"
 echo "  lib/     $(ls "$OUT_DIR/lib")"
 echo "  linker/  $(ls "$OUT_DIR/linker")"
-echo "  include/ ulmk/ + ulmk_syscall_abi.h + board/"
+echo "  include/ ulmk/ + ulmk_syscall_abi.h + board/ ($DRIVER_HDRS driver APIs)"
