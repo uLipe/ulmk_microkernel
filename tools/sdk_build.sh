@@ -153,8 +153,13 @@ test -f "$OUT_DIR/include/ulmk/microkernel.h"
 test -f "$OUT_DIR/include/ulmk_syscall_abi.h"
 
 # A board that compiles drivers into the archive has to publish their API.
-DRIVER_DIRS=$(find "$CHIP_DIR/drivers" -maxdepth 2 -type d -name include \
-	2>/dev/null | wc -l)
+# Guarded rather than piping a failing find: under pipefail its exit status
+# would survive 2>/dev/null and abort the script on every driverless board.
+DRIVER_DIRS=0
+if [ -d "$CHIP_DIR/drivers" ]; then
+	DRIVER_DIRS=$(find "$CHIP_DIR/drivers" -maxdepth 2 -type d \
+		-name include | wc -l)
+fi
 if [ "$DRIVER_DIRS" -gt 0 ] && [ "$DRIVER_HDRS" -eq 0 ]; then
 	echo "error: board has $DRIVER_DIRS driver include dirs, none shipped" >&2
 	exit 1
