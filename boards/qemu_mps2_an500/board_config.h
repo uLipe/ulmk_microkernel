@@ -25,10 +25,7 @@
 /* ARMv7-M (PMSAv7 MPU). */
 #define ULMK_ARCH_ARMV8M		0
 
-/* Single-precision FPU (Cortex-M7 FPv5); enabled at boot.  Set 0 to disable. */
-#ifndef ULMK_ARCH_HAVE_FPU
-#define ULMK_ARCH_HAVE_FPU		1
-#endif
+/* FPU presence follows ULMK_CONFIG_FPU; see cmake/arm_fpu.cmake. */
 
 #ifndef ULMK_ARCH_IDLE_IS_WFI
 #define ULMK_ARCH_IDLE_IS_WFI		1

@@ -53,12 +53,15 @@ ARM_BOARD ?= qemu_mps2_an500
 CC         := arm-none-eabi-gcc
 QEMU       := qemu-system-arm
 BOARD      := boards/$(ARM_BOARD)
+# Hard float, matching the SDK: ld rejects a softfp consumer linked against a
+# hard-float archive.  Both suite boards have an FPU; a board without one turns
+# ULMK_CONFIG_FPU off in its board.cmake and is not exercised here.
 ifeq ($(ARM_BOARD),qemu_mps2_an505)
 MACHINE    := mps2-an505
-ARCH_FLAGS := -mthumb -mcpu=cortex-m33 -mfloat-abi=softfp -mfpu=fpv5-sp-d16
+ARCH_FLAGS := -mthumb -mcpu=cortex-m33 -mfloat-abi=hard -mfpu=fpv5-sp-d16
 else
 MACHINE    := mps2-an500
-ARCH_FLAGS := -mthumb -mcpu=cortex-m7 -mfloat-abi=softfp -mfpu=fpv5-sp-d16
+ARCH_FLAGS := -mthumb -mcpu=cortex-m7 -mfloat-abi=hard -mfpu=fpv5-sp-d16
 endif
 QEMU_EXTRA := -semihosting
 else

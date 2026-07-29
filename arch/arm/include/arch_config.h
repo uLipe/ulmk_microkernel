@@ -16,6 +16,7 @@
 #ifndef ULMK_ARCH_ARM_CONFIG_H
 #define ULMK_ARCH_ARM_CONFIG_H
 
+#include <ulmk/config.h>
 #include <ulmk/platform.h>
 
 #ifndef ULMK_ARCH_NUM_CPU
@@ -28,12 +29,14 @@
 #endif
 
 /*
- * FPU: Cortex-M4F/M7/M33 ship a single-precision FPU that must be enabled in
- * the SCB CPACR at boot (default on; board may force off with 0).  When on,
- * the callee-saved FP registers s16-s31 are saved/restored on context switch.
+ * FPU: Cortex-M4F/M7/M33 ship an FPU that must be enabled in the SCB CPACR at
+ * boot.  When on, the FP register file is saved/restored on context switch and
+ * the build uses the hard-float ABI (see cmake/arm_fpu.cmake) — the two have
+ * to move together, so both follow ULMK_CONFIG_FPU.  A board may still pin it
+ * by defining ULMK_ARCH_HAVE_FPU itself.
  */
 #ifndef ULMK_ARCH_HAVE_FPU
-#define ULMK_ARCH_HAVE_FPU	1
+#define ULMK_ARCH_HAVE_FPU	ULMK_CONFIG_FPU
 #endif
 
 /*

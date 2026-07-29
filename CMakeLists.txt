@@ -85,6 +85,7 @@ execute_process(
         --set "ULMK_CONFIG_BOARD_IRQ_CTRL=${ULMK_CONFIG_BOARD_IRQ_CTRL}"
         --set "ULMK_CONFIG_BOARD_IRQ_CLAIM=${ULMK_CONFIG_BOARD_IRQ_CLAIM}"
         --set "ULMK_CONFIG_BOARD_PMP_EXTRA=${ULMK_CONFIG_BOARD_PMP_EXTRA}"
+        --set "ULMK_CONFIG_FPU=${ULMK_CONFIG_FPU}"
     RESULT_VARIABLE _ulmk_gen_rc)
 if(NOT _ulmk_gen_rc EQUAL 0)
     message(FATAL_ERROR "gen_config.py failed (rc=${_ulmk_gen_rc})")
