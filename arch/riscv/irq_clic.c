@@ -139,7 +139,7 @@ void riscv_clic_enable(uint8_t srpn)
 		return;
 	irq = g_src_clic_irq[srpn];
 	*clic_intie(irq) = 1u;
-	__asm__ volatile("csrs mstatus, %0" :: "r"(MSTATUS_MIE_BIT));
+	/* Do not csrs mstatus.MIE here — enable from syscall/trap would nest. */
 }
 
 void riscv_clic_disable(uint8_t srpn)
@@ -152,17 +152,7 @@ void riscv_clic_disable(uint8_t srpn)
 	*clic_intie(irq) = 0u;
 }
 
-/*
- * Drop CLIC current interrupt level (MIL).  Required before a possible
- * context switch from ISR: abandoning mret leaves mintstatus elevated and
- * masks further same-level IRQs (Espressif CLIC HW nesting).
- *
- * ESP32-P4 rev < v3: mintstatus @ 0x346 (non-standard; 0xFB1 is illegal).
- */
-void riscv_clic_drop_mil(void)
-{
-	__asm__ volatile("csrw 0x346, zero");
-}
+/* riscv_clic_drop_mil lives in trap.S — mintstatus is read-only; needs mret. */
 
 void riscv_clic_dispatch(uint32_t mcause)
 {

@@ -12,6 +12,7 @@
 	 * TF_MCAUSE is mandatory on Espressif CLIC: mret restores mintstatus
 	 * from mcause.MPIL.  Leaving a stale/clobbered mcause masks further IRQs.
 	 */
+#include <arch_config.h>
 	.equ TF_SIZE, 148
 	.equ TF_RA, 0
 	.equ TF_SP, 4
@@ -96,6 +97,18 @@ _trap_handler:
 	csrr    t0, mstatus
 	sw      t0, TF_MSTATUS(sp)
 	csrr    t0, mcause
+#if ULMK_ARCH_HAVE_CLIC
+	/*
+	 * mintstatus.MIL is read-only; the only way down is mret reloading it
+	 * from mcause.MPIL.  An exception records the level it interrupted, so
+	 * clearing MPIL here returns the resumed context to base level instead
+	 * of leaving it at the level of an ISR that switched away.
+	 */
+	bltz    t0, 1f
+	li      t1, 0xFF00FFFF
+	and     t0, t0, t1
+1:
+#endif
 	sw      t0, TF_MCAUSE(sp)
 	addi    t0, sp, TF_SIZE
 	sw      t0, TF_SP(sp)
@@ -110,6 +123,29 @@ _trap_handler:
 	call    _ulmk_trap_dispatch
 
 .Ltrap_restore:
+	/* CSRs first — t0/t1 are still scratch until the GPRs are reloaded. */
+	lw      t0, TF_MEPC(sp)
+	csrw    mepc, t0
+	lw      t0, TF_MCAUSE(sp)
+#if ULMK_ARCH_HAVE_CLIC
+	/*
+	 * ISRs call riscv_clic_drop_mil() before any switch.  mret reloads
+	 * MIL from mcause.MPIL only when interrupt=1; a stale pre-handler
+	 * level here would raise MIL again and mask the tick.  Clear MPIL
+	 * on interrupt exits only — never force the interrupt bit (that
+	 * breaks exception/ecall mret).
+	 */
+	bgez    t0, 4f
+	li      t1, 0xFF00FFFF
+	and     t0, t0, t1
+4:
+#endif
+	csrw    mcause, t0
+	lw      t0, TF_MSTATUS(sp)
+	/* MIE must stay clear until mret; nested IRQ here corrupts mepc. */
+	andi    t0, t0, ~8
+	csrw    mstatus, t0
+
 	lw      ra, TF_RA(sp)
 	lw      gp, TF_GP(sp)
 	lw      tp, TF_TP(sp)
@@ -140,14 +176,37 @@ _trap_handler:
 	lw      s9, TF_S9(sp)
 	lw      s10, TF_S10(sp)
 	lw      s11, TF_S11(sp)
-	lw      t0, TF_MEPC(sp)
-	csrw    mepc, t0
-	lw      t0, TF_MCAUSE(sp)
-	csrw    mcause, t0
-	lw      t0, TF_MSTATUS(sp)
-	/* MIE must stay clear until mret; nested IRQ here corrupts mepc. */
-	andi    t0, t0, ~8
-	csrw    mstatus, t0
 	addi    sp, sp, TF_SIZE
 	mret
 	.size _trap_handler, . - _trap_handler
+
+#if ULMK_ARCH_HAVE_CLIC
+	/*
+	 * mintstatus.MIL is read-only, and the hardware only reloads it from
+	 * mcause.MPIL on mret.  An ISR that switches context never reaches its
+	 * own mret, so the level would stay raised and mask every same-level
+	 * source (tick included) until that context is resumed.  Return to the
+	 * caller through a deliberate M-mode mret to bring the level down while
+	 * still inside the handler.  Interrupts stay masked (MPIE = 0).
+	 */
+	.section .text.trap, "ax", @progbits
+	.balign 4
+	.global riscv_clic_drop_mil
+	.type riscv_clic_drop_mil, @function
+riscv_clic_drop_mil:
+	csrr    t0, mcause
+	li      t1, 0xFF00FFFF
+	and     t0, t0, t1
+	li      t1, 1 << 31
+	or      t0, t0, t1
+	csrw    mcause, t0
+	csrr    t0, mstatus
+	li      t1, 3 << 11
+	or      t0, t0, t1
+	li      t1, ~(1 << 7)
+	and     t0, t0, t1
+	csrw    mstatus, t0
+	csrw    mepc, ra
+	mret
+	.size riscv_clic_drop_mil, . - riscv_clic_drop_mil
+#endif
