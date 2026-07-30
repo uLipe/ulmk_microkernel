@@ -12,13 +12,13 @@ extern uint8_t _ulmk_kernel_data_start[];
 #define STACK_SZ	2048u
 #define BIT_GO		(1u << 0)
 #define BIT_DONE	(1u << 1)
+#define BIT_ARMED	(1u << 2)
+#define BIT_ALIVE	(1u << 3)
+#define PROBE_MS	200u
 
 static ulmk_notif_t   g_sync;
 static volatile void *g_shared;
 static volatile int   g_grant_result = -1;
-static volatile int   g_fault_progress;
-static volatile int   g_kexec_progress;
-static volatile int   g_kread_progress;
 
 static void grant_reader(void *arg)
 {
@@ -33,21 +33,13 @@ static void grant_reader(void *arg)
 	ulmk_thread_exit();
 }
 
-static void fault_writer(void *arg)
-{
-	volatile uint32_t *victim;
-	uint32_t           bits = 0u;
-
-	(void)arg;
-	ulmk_notif_wait(g_sync, BIT_GO, &bits);
-	victim = (volatile uint32_t *)g_shared;
-	g_fault_progress = 1;
-	ulmk_notif_signal(g_sync, BIT_DONE);
-	victim[0] = 0xCAFECAFEu;
-	g_fault_progress = 2;
-	ulmk_thread_exit();
-}
-
+/*
+ * Each probe announces BIT_ARMED, performs the access that must be refused,
+ * and only reaches BIT_ALIVE if it was let through.  Signalling before the
+ * access instead — and then counting yields — cannot tell a thread that was
+ * killed from one that merely never got the CPU back, and reports the second
+ * as a success.
+ */
 static void kexec_trigger(void *arg)
 {
 	typedef void (*fn_t)(void);
@@ -62,10 +54,9 @@ static void kexec_trigger(void *arg)
 	 */
 	fn = (fn_t)(uintptr_t)0x1000u;
 	(void)_ulmk_kernel_text_start;
-	g_kexec_progress = 1;
-	ulmk_notif_signal(g_sync, BIT_DONE);
+	ulmk_notif_signal(g_sync, BIT_ARMED);
 	fn();
-	g_kexec_progress = 2;
+	ulmk_notif_signal(g_sync, BIT_ALIVE);
 	ulmk_thread_exit();
 }
 
@@ -76,12 +67,47 @@ static void kread_trigger(void *arg)
 
 	(void)arg;
 	ulmk_notif_wait(g_sync, BIT_GO, &bits);
-	g_kread_progress = 1;
-	ulmk_notif_signal(g_sync, BIT_DONE);
+	ulmk_notif_signal(g_sync, BIT_ARMED);
 	val = *(volatile uint32_t *)(uintptr_t)_ulmk_kernel_data_start;
 	(void)val;
-	g_kread_progress = 2;
+	ulmk_notif_signal(g_sync, BIT_ALIVE);
 	ulmk_thread_exit();
+}
+
+static int probe_denied(const char *label, const char *name,
+			void (*entry)(void *))
+{
+	uint32_t bits = 0u;
+
+	if (sdk_spawn(name, entry, NULL, 30u, STACK_SZ, 0u) ==
+	    ULMK_TID_INVALID) {
+		sdk_puts("mem_isolation: FAIL spawn ");
+		sdk_puts(label);
+		sdk_puts("\n");
+		return 0;
+	}
+
+	ulmk_notif_signal(g_sync, BIT_GO);
+	if (ulmk_notif_wait(g_sync, BIT_ARMED, &bits) != ULMK_OK) {
+		sdk_puts("mem_isolation: FAIL arm ");
+		sdk_puts(label);
+		sdk_puts("\n");
+		return 0;
+	}
+
+	bits = 0u;
+	if (ulmk_notif_wait_timeout(g_sync, BIT_ALIVE, &bits,
+				    PROBE_MS) == ULMK_ETIMEOUT) {
+		sdk_puts("mem_isolation: ");
+		sdk_puts(label);
+		sdk_puts(" PASS\n");
+		return 1;
+	}
+
+	sdk_puts("mem_isolation: FAIL ");
+	sdk_puts(label);
+	sdk_puts(" (access allowed)\n");
+	return 0;
 }
 
 static void supervisor(void *arg)
@@ -159,79 +185,42 @@ static void supervisor(void *arg)
 	}
 #endif
 
-#if defined(__ARM_ARCH)
-	g_fault_progress = 0;
-	g_shared = base;
-	ulmk_mem_unmap(base, 128u);
-	base = NULL;
-	bits = 0u;
-	sdk_spawn("fwr", fault_writer, NULL, 30u, STACK_SZ, 0u);
-	ulmk_notif_signal(g_sync, BIT_GO);
-	ulmk_notif_wait(g_sync, BIT_DONE, &bits);
-	for (i = 0; i < 400; i++)
-		ulmk_thread_yield();
-	if (g_fault_progress == 1)
-		sdk_puts("mem_isolation: scenario 3 (MPU fault) PASS\n");
-	else if (g_fault_progress == 2)
-		sdk_puts("mem_isolation: scenario 3 (MPU fault) PARTIAL\n");
-	else {
-		sdk_puts("mem_isolation: FAIL scenario 3\n");
+	/*
+	 * QEMU's TriCore MPU and its ARMv7-M MPU do not hold U-mode out of
+	 * kernel memory the way the silicon does, so the probe would report a
+	 * kernel bug that is really an emulation gap.  Kept out of the run
+	 * rather than softened: a probe whose failure is tolerated is the
+	 * reason this case went years without noticing a real hole.  The same
+	 * ground is covered on hardware by the TC275 silicon suite and by the
+	 * ESP32-P4 board_pmp_neg component.
+	 */
+#if defined(__TRICORE__) || defined(__tricore__) || \
+	(defined(__ARM_ARCH) && __ARM_ARCH < 8)
+	sdk_puts("mem_isolation: scenario 5 (kernel data fault) SKIP\n");
+	sdk_puts("mem_isolation: scenario 4 (kernel exec fault) SKIP\n");
+	(void)kread_trigger;
+	(void)kexec_trigger;
+#else
+	if (!probe_denied("scenario 5 (kernel data fault)", "kread",
+			  kread_trigger))
 		overall = 0;
-	}
+
+	if (!probe_denied("scenario 4 (kernel exec fault)", "kexec",
+			  kexec_trigger))
+		overall = 0;
 #endif
 
-	g_kread_progress = 0;
-	bits = 0u;
-	sdk_spawn("kread", kread_trigger, NULL, 30u, STACK_SZ, 0u);
-	ulmk_notif_signal(g_sync, BIT_GO);
-	ulmk_notif_wait(g_sync, BIT_DONE, &bits);
-	for (i = 0; i < 400; i++)
-		ulmk_thread_yield();
-	if (g_kread_progress == 1)
-		sdk_puts("mem_isolation: scenario 5 (kernel data fault) PASS\n");
-	else if (g_kread_progress == 2)
-		sdk_puts("mem_isolation: scenario 5 (kernel data fault) PARTIAL\n");
-	else {
-		sdk_puts("mem_isolation: FAIL scenario 5\n");
-		overall = 0;
-	}
-
-	g_kexec_progress = 0;
-	bits = 0u;
-	sdk_spawn("kexec", kexec_trigger, NULL, 30u, STACK_SZ, 0u);
-	ulmk_notif_signal(g_sync, BIT_GO);
-	ulmk_notif_wait(g_sync, BIT_DONE, &bits);
-	for (i = 0; i < 400; i++)
-		ulmk_thread_yield();
-	if (g_kexec_progress == 1)
-		sdk_puts("mem_isolation: scenario 4 (kernel exec fault) PASS\n");
-	else if (g_kexec_progress == 2)
-		sdk_puts("mem_isolation: scenario 4 (kernel exec fault) PARTIAL\n");
-	else {
-		sdk_puts("mem_isolation: FAIL scenario 4\n");
-		overall = 0;
-	}
-
-#if !defined(__ARM_ARCH)
-	g_fault_progress = 0;
-	g_shared = base;
+	/*
+	 * Scenario 3 used to write to an address it had just unmapped and call
+	 * the result a fault.  It is not one on either arch: the user pool is
+	 * covered by a single static grant, so unmapping drops the bookkeeping
+	 * and leaves the window open.  Proving revocation needs per-allocation
+	 * regions, which the kernel does not do yet — asserting a fault here
+	 * only reintroduces a test that passes for the wrong reason.
+	 */
+	sdk_puts("mem_isolation: scenario 3 (unmap revoke) SKIP\n");
 	ulmk_mem_unmap(base, 128u);
 	base = NULL;
-	bits = 0u;
-	sdk_spawn("fwr", fault_writer, NULL, 30u, STACK_SZ, 0u);
-	ulmk_notif_signal(g_sync, BIT_GO);
-	ulmk_notif_wait(g_sync, BIT_DONE, &bits);
-	for (i = 0; i < 400; i++)
-		ulmk_thread_yield();
-	if (g_fault_progress == 1)
-		sdk_puts("mem_isolation: scenario 3 (MPU fault) PASS\n");
-	else if (g_fault_progress == 2)
-		sdk_puts("mem_isolation: scenario 3 (MPU fault) PARTIAL\n");
-	else {
-		sdk_puts("mem_isolation: FAIL scenario 3\n");
-		overall = 0;
-	}
-#endif
 
 	/* Last fault may leave the CPU wedged — report before more syscalls. */
 	if (overall)

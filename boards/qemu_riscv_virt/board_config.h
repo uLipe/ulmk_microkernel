@@ -51,6 +51,16 @@
 #define ULMK_ARCH_PMP_NUM		8
 #endif
 
+/*
+ * User RAM sits directly above kernel RAM and is not a naturally aligned
+ * power of two, so NAPOT would round the window outwards over the kernel's
+ * own data and hand it to U-mode.  TOR draws the line where the linker put
+ * it, at the cost of slot 3 holding the lower bound.
+ */
+#define ULMK_ARCH_PMP_URAM		4
+#define ULMK_ARCH_PMP_URAM_TOR		1
+#define ULMK_ARCH_PMP_MMIO		5
+
 #ifndef ULMK_ARCH_IDLE_IS_WFI
 #define ULMK_ARCH_IDLE_IS_WFI		0
 #endif

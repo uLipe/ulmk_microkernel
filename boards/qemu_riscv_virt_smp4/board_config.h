@@ -51,6 +51,11 @@
 #define ULMK_ARCH_PMP_NUM		8
 #endif
 
+/* See qemu_riscv_virt: NAPOT rounds user RAM out over kernel RAM. */
+#define ULMK_ARCH_PMP_URAM		4
+#define ULMK_ARCH_PMP_URAM_TOR		1
+#define ULMK_ARCH_PMP_MMIO		5
+
 #ifndef ULMK_ARCH_IDLE_IS_WFI
 #define ULMK_ARCH_IDLE_IS_WFI		0
 #endif

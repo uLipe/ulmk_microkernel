@@ -40,30 +40,72 @@
 #define ULMK_ARCH_MAX_REGIONS	12
 #define ULMK_ARCH_REGION_ALIGN	64
 
+/*
+ * Slot map.  Boards override when boot firmware locks slots: a write to a
+ * locked entry is discarded by the hardware, so a role left on top of one is
+ * never programmed and the grant silently goes missing.
+ */
+#ifndef ULMK_ARCH_PMP_KERNEL
 #define ULMK_ARCH_PMP_KERNEL	0
+#endif
+#ifndef ULMK_ARCH_PMP_KRAM
 #define ULMK_ARCH_PMP_KRAM	1
+#endif
+#ifndef ULMK_ARCH_PMP_UTEXT
 #define ULMK_ARCH_PMP_UTEXT	2
+#endif
+#ifndef ULMK_ARCH_PMP_URAM
 #define ULMK_ARCH_PMP_URAM	3
+#endif
+#ifndef ULMK_ARCH_PMP_MMIO
 #define ULMK_ARCH_PMP_MMIO	4
+#endif
+#ifndef ULMK_ARCH_PMP_USER_BASE
 #define ULMK_ARCH_PMP_USER_BASE	5
+#endif
 
+#ifndef ULMK_ARCH_PMP_DYNAMIC_BASE
 #if ULMK_ARCH_PMP_NUM <= 5
 #define ULMK_ARCH_PMP_DYNAMIC_BASE	ULMK_ARCH_PMP_NUM
 #else
 #define ULMK_ARCH_PMP_DYNAMIC_BASE	6
 #endif
-
-#ifndef ULMK_ARCH_PMP_PRESERVE_BOOT
-#define ULMK_ARCH_PMP_PRESERVE_BOOT	0
 #endif
 
 /* High slots reserved for on-demand map/unmap (ESP32-P4 has 16). */
+#ifndef ULMK_ARCH_PMP_TEMP0
 #if ULMK_ARCH_PMP_NUM >= 16
 #define ULMK_ARCH_PMP_TEMP0		14
-#define ULMK_ARCH_PMP_TEMP1		15
 #else
 #define ULMK_ARCH_PMP_TEMP0		(ULMK_ARCH_PMP_NUM > 0 ? ULMK_ARCH_PMP_NUM - 1 : 0)
+#endif
+#endif
+#ifndef ULMK_ARCH_PMP_TEMP1
+#if ULMK_ARCH_PMP_NUM >= 16
+#define ULMK_ARCH_PMP_TEMP1		15
+#else
 #define ULMK_ARCH_PMP_TEMP1		ULMK_ARCH_PMP_TEMP0
+#endif
+#endif
+
+/*
+ * Slots the dynamic grant sweep must step over: board extras and anything
+ * boot firmware locked.  Bit n = slot n is spoken for.
+ */
+#ifndef ULMK_ARCH_PMP_RESERVED_MASK
+#define ULMK_ARCH_PMP_RESERVED_MASK	0u
+#endif
+
+/*
+ * Describe the user RAM window with TOR instead of NAPOT.  NAPOT can only
+ * name a naturally aligned power of two, so on a layout where user RAM
+ * neither starts nor ends on such a boundary the window is rounded outwards
+ * and swallows whatever sits below it — kernel RAM, typically, which hands
+ * U-mode exactly the access the region was meant to withhold.  Costs the
+ * slot below ULMK_ARCH_PMP_URAM, which then holds the lower bound.
+ */
+#ifndef ULMK_ARCH_PMP_URAM_TOR
+#define ULMK_ARCH_PMP_URAM_TOR	0
 #endif
 
 #define ULMK_ARCH_PRS_KERNEL	0u
