@@ -201,17 +201,21 @@ static void collect_bucket(struct timer_wheel *w, unsigned int lvl,
 
 static void expire_list(sys_dlist_t *list)
 {
-	sys_dnode_t *node;
-	sys_dnode_t *next;
-
-	SYS_DLIST_FOR_EACH_NODE_SAFE(list, node, next) {
+	/*
+	 * Drain by pop-head, not FOR_EACH_NODE_SAFE.  A callback may
+	 * cancel another timer still on this pending list; SAFE keeps a
+	 * stale "next" that becomes self-linked after cancel and loops
+	 * forever with IRQs masked (kills the tick).
+	 */
+	while (!sys_dlist_is_empty(list)) {
+		sys_dnode_t *node = sys_dlist_get(list);
 		struct ulmk_timeout *to =
 			SYS_DLIST_CONTAINER_OF(node, struct ulmk_timeout, node);
+		void (*cb)(struct ulmk_timeout *) = to->cb;
 
-		sys_dlist_remove(node);
 		sys_dnode_init(node);
-		if (to->cb)
-			to->cb(to);
+		if (cb)
+			cb(to);
 	}
 }
 

@@ -35,7 +35,12 @@ int ulmk_timeout_arm(ulmk_thread_t *th, uint32_t ms,
 	if (!th || !cb || ticks == 0u)
 		return ULMK_EINVAL;
 
-	sys_dnode_init(&th->timeout.node);
+	/*
+	 * Cancel first — never sys_dnode_init() a still-linked node.
+	 * Init-without-remove orphans the wheel bucket and the next tick
+	 * walks a self-loop forever (IRQs masked).
+	 */
+	(void)ulmk_timer_cancel(&th->timeout);
 	th->timeout.cb = cb;
 	return ulmk_timer_add(&th->timeout, ticks);
 }

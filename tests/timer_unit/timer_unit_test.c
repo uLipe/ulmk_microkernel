@@ -141,6 +141,57 @@ static void test_zero_becomes_one(void)
 	CHECK(g_fire_count == 1, "fires after one tick");
 }
 
+/*
+ * Regression: HIL SPI-on-ESP32-P4 hung in ulmk_timer_tick with IRQs
+ * masked.  Root cause — expire_list used FOR_EACH_NODE_SAFE; a callback
+ * that cancels a peer still on the pending list left "next" self-linked,
+ * so the walk never terminated.  Repro values: two timers, same bucket
+ * (delta=3), first cb cancels the second.
+ */
+static struct ulmk_timeout *g_peer;
+
+static void cancel_peer_cb(struct ulmk_timeout *to)
+{
+	(void)to;
+	g_fire_count++;
+	if (g_peer)
+		(void)ulmk_timer_cancel(g_peer);
+}
+
+static void test_cancel_peer_same_bucket(void)
+{
+	struct ulmk_timeout a, b;
+
+	reset();
+	sys_dnode_init(&a.node);
+	sys_dnode_init(&b.node);
+	a.cb = cancel_peer_cb;
+	b.cb = fire_cb;
+	g_peer = &b;
+	CHECK(ulmk_timer_add(&a, 3u) == ULMK_OK, "peer-cancel a");
+	CHECK(ulmk_timer_add(&b, 3u) == ULMK_OK, "peer-cancel b");
+	advance(3u);
+	CHECK(g_fire_count == 1, "only a fires; b cancelled in-cb");
+	CHECK(!sys_dnode_is_linked(&b.node), "b left unlinked");
+	g_peer = NULL;
+}
+
+/* Re-add while still linked must detach first (no bucket corruption). */
+static void test_readd_while_linked(void)
+{
+	struct ulmk_timeout to;
+
+	reset();
+	sys_dnode_init(&to.node);
+	to.cb = fire_cb;
+	CHECK(ulmk_timer_add(&to, 10u) == ULMK_OK, "first add");
+	CHECK(ulmk_timer_add(&to, 3u) == ULMK_OK, "re-add shorter");
+	advance(3u);
+	CHECK(g_fire_count == 1, "fires at new expiry");
+	advance(20u);
+	CHECK(g_fire_count == 1, "old slot did not double-fire");
+}
+
 int main(void)
 {
 	printf("timer_unit:\n");
@@ -150,6 +201,8 @@ int main(void)
 	test_level1_boundary();
 	test_batch_same_bucket();
 	test_zero_becomes_one();
+	test_cancel_peer_same_bucket();
+	test_readd_while_linked();
 	printf("timer_unit: %d run, %d failed\n", tests_run, tests_failed);
 	return tests_failed ? 1 : 0;
 }
