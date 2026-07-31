@@ -1,6 +1,11 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * RISC-V SMP: hart id, spinlocks, CLINT MSIP IPI, secondary park/release.
+ * RISC-V SMP: hart id, spinlocks, IPI, secondary park/release.
+ *
+ * IPI / secondary wake:
+ *   ULMK_ARCH_HAVE_CLINT     — CLINT MSIP (QEMU virt)
+ *   ULMK_ARCH_HAVE_BOARD_IPI — board soft-IRQ (ESP32-P4 HP_SYSTEM)
+ * Secondary start without CLINT uses ulmk_board_cpu_start().
  */
 
 #include <stdint.h>
@@ -9,6 +14,7 @@
 #include <ulmk/config.h>
 #include <ulmk_arch.h>
 #include <arch_config.h>
+#include <ulmk/board.h>
 
 #if ULMK_CONFIG_ENABLE_SMP
 #define SMP_MAX_HARTS	ULMK_ARCH_NUM_CPU
@@ -39,6 +45,7 @@ static volatile uint32_t g_smp_gate = SMP_GATE_WAIT;
 uint8_t g_ulmk_secondary_stack[SMP_MAX_HARTS][ULMK_SECONDARY_STACK_SIZE]
 	__attribute__((aligned(16))) = { { 1 } };
 static volatile uint32_t g_secondary_release[SMP_MAX_HARTS];
+static volatile uint32_t g_secondary_armed[SMP_MAX_HARTS];
 static void (*g_secondary_entry[SMP_MAX_HARTS])(void);
 
 void ulmk_arch_smp_mark_ready(void)
@@ -105,11 +112,13 @@ void ulmk_arch_spin_unlock_irqrestore(ulmk_spinlock_t *lock,
 	ulmk_arch_cpu_irq_restore(key);
 }
 
+#if ULMK_ARCH_HAVE_CLINT
 static volatile uint32_t *clint_msip(uint32_t hart)
 {
 	return (volatile uint32_t *)(uintptr_t)
 		(ULMK_ARCH_CLINT_MSIP0 + hart * 4u);
 }
+#endif
 
 volatile uint32_t g_ulmk_ipi_sent;
 volatile uint32_t g_ulmk_ipi_taken;
@@ -123,7 +132,13 @@ void ulmk_arch_send_ipi(uint32_t cpu_id)
 		return;
 	g_ulmk_ipi_sent++;
 	__asm__ volatile("fence rw, rw" ::: "memory");
+#if ULMK_ARCH_HAVE_BOARD_IPI
+	ulmk_board_ipi_send(cpu_id);
+#elif ULMK_ARCH_HAVE_CLINT
 	*clint_msip(cpu_id) = 1u;
+#else
+#error "SMP IPI: enable ULMK_ARCH_HAVE_CLINT or ULMK_ARCH_HAVE_BOARD_IPI"
+#endif
 #else
 	(void)cpu_id;
 #endif
@@ -139,7 +154,11 @@ void ulmk_arch_ipi_clear_self(void)
 	uint32_t cpu = ulmk_arch_cpu_id();
 
 	if (cpu < (uint32_t)ULMK_ARCH_NUM_CPU) {
+#if ULMK_ARCH_HAVE_BOARD_IPI
+		ulmk_board_ipi_clear_self();
+#elif ULMK_ARCH_HAVE_CLINT
 		*clint_msip(cpu) = 0u;
+#endif
 		g_ulmk_ipi_taken++;
 	}
 #endif
@@ -150,8 +169,13 @@ void ulmk_arch_ipi_pulse_self(void)
 #if ULMK_CONFIG_ENABLE_SMP
 	uint32_t cpu = ulmk_arch_cpu_id();
 
-	if (cpu < (uint32_t)SMP_MAX_HARTS)
-		*clint_msip(cpu) = 1u;
+	if (cpu >= (uint32_t)SMP_MAX_HARTS)
+		return;
+#if ULMK_ARCH_HAVE_BOARD_IPI
+	ulmk_board_ipi_send(cpu);
+#elif ULMK_ARCH_HAVE_CLINT
+	*clint_msip(cpu) = 1u;
+#endif
 #endif
 }
 
@@ -159,27 +183,63 @@ void ulmk_arch_secondary_init(void)
 {
 	extern void _trap_handler(void);
 
-	__asm__ volatile("csrw mtvec, %0" :: "r"((uint32_t)_trap_handler));
-#if ULMK_CONFIG_ENABLE_SMP
+	/*
+	 * Full vector bring-up (CLIC MTVT / mtvec mode) — a bare csrw mtvec
+	 * leaves Espressif CLIC in direct mode and drops board IPIs.
+	 */
+	ulmk_arch_irq_vectors_init((uintptr_t)_trap_handler, 0u, 0u);
+#if ULMK_CONFIG_ENABLE_SMP && ULMK_ARCH_HAVE_CLINT
 	__asm__ volatile("csrs mie, %0" :: "r"(1u << 3));
+#endif
+#if ULMK_CONFIG_ENABLE_SMP && ULMK_ARCH_HAVE_BOARD_IPI
+	ulmk_board_ipi_arm_self();
 #endif
 	ulmk_arch_mpu_init();
 }
 
 void ulmk_arch_secondary_mark_ready(void)
 {
+#if ULMK_CONFIG_ENABLE_SMP
+	uint32_t cpu = ulmk_arch_cpu_id();
+
+	__asm__ volatile("fence rw, rw" ::: "memory");
+	if (cpu < (uint32_t)SMP_MAX_HARTS)
+		g_secondary_armed[cpu] = 1u;
+#endif
 }
 
 void ulmk_arch_start_secondary(uint32_t cpu_id, void (*entry)(void))
 {
 #if ULMK_CONFIG_ENABLE_SMP
+	extern void _start(void);
+
 	if (cpu_id == 0u || cpu_id >= (uint32_t)SMP_MAX_HARTS || !entry)
 		return;
 
+#if ULMK_ARCH_HAVE_BOARD_IPI
+	/* Arm receive path on CPU0 before the secondary can send back. */
+	ulmk_board_ipi_arm_self();
+#endif
+
 	g_secondary_entry[cpu_id] = entry;
+	g_secondary_armed[cpu_id] = 0u;
 	__asm__ volatile("fence rw, rw" ::: "memory");
 	g_secondary_release[cpu_id] = 1u;
+
+#if ULMK_ARCH_HAVE_BOARD_CPU_START
+	/*
+	 * SoC has no CLINT MSIP: release the core into _start → smp_park,
+	 * which then jumps to @entry once the release flag is visible.
+	 */
+	ulmk_board_cpu_start(cpu_id, _start);
+#elif ULMK_ARCH_HAVE_CLINT
 	*clint_msip(cpu_id) = 1u;
+#endif
+
+#if ULMK_ARCH_HAVE_BOARD_CPU_START
+	while (g_secondary_armed[cpu_id] == 0u)
+		;
+#endif
 #else
 	(void)cpu_id;
 	(void)entry;
@@ -209,7 +269,9 @@ void ulmk_arch_smp_park(void)
 	while (g_secondary_release[hart] == 0u)
 		;
 
+#if ULMK_ARCH_HAVE_CLINT
 	ulmk_arch_ipi_clear_self();
+#endif
 	entry = g_secondary_entry[hart];
 	sp = (uintptr_t)&g_ulmk_secondary_stack[hart][0] +
 	     sizeof(g_ulmk_secondary_stack[hart]);

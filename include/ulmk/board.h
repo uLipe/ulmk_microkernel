@@ -103,4 +103,19 @@ void ulmk_board_tick_init(uint32_t tick_hz);
 void ulmk_board_tick_ack(void);
 #endif
 
+#if ULMK_ARCH_HAVE_BOARD_CPU_START
+/*
+ * Release @cpu_id so it begins executing at @entry (typically _start → park).
+ * Called from ulmk_arch_start_secondary() when there is no CLINT MSIP wake.
+ */
+void ulmk_board_cpu_start(uint32_t cpu_id, void (*entry)(void));
+#endif
+
+#if ULMK_ARCH_HAVE_BOARD_IPI
+/* Soft IPI: arm on this CPU, raise on @cpu_id, clear the local pending bit. */
+void ulmk_board_ipi_arm_self(void);
+void ulmk_board_ipi_send(uint32_t cpu_id);
+void ulmk_board_ipi_clear_self(void);
+#endif
+
 #endif /* UL_BOARD_H */

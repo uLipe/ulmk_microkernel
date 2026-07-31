@@ -1030,7 +1030,7 @@ void ulmk_arch_init(ulmk_boot_info_t *info)
 
 	ulmk_arch_irq_vectors_init((uintptr_t)_trap_handler, 0u, 0u);
 	ulmk_arch_mpu_init();
-#if ULMK_CONFIG_ENABLE_SMP
+#if ULMK_CONFIG_ENABLE_SMP && ULMK_ARCH_HAVE_CLINT
 	/* Accept CLINT MSIP reschedule IPIs on every hart. */
 	__asm__ volatile("csrs mie, %0" :: "r"(1u << 3));
 #endif

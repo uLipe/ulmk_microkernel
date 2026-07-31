@@ -119,6 +119,18 @@
 #define ULMK_ARCH_HAVE_CLINT	0
 #endif
 
+/*
+ * Board-owned SMP bring-up / IPI when the SoC has no CLINT MSIP (e.g. ESP32-P4).
+ * QEMU virt keeps CLINT and leaves these at 0.
+ */
+#ifndef ULMK_ARCH_HAVE_BOARD_CPU_START
+#define ULMK_ARCH_HAVE_BOARD_CPU_START	0
+#endif
+
+#ifndef ULMK_ARCH_HAVE_BOARD_IPI
+#define ULMK_ARCH_HAVE_BOARD_IPI	0
+#endif
+
 #ifndef ULMK_ARCH_HAVE_PLIC
 #define ULMK_ARCH_HAVE_PLIC	0
 #endif
