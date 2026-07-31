@@ -1118,7 +1118,18 @@ void ulmk_arch_tick_ack(void)
 
 uint32_t ulmk_arch_timer_wheel_cpu(void)
 {
+#if ULMK_ARCH_HAVE_CLINT
+	/* Per-hart mtimecmp — each CPU advances its own wheel. */
 	return ulmk_arch_cpu_id();
+#else
+	/*
+	 * Shared board tick (e.g. SYSTIMER → one CLIC line).  Only CPU0
+	 * calls ulmk_timer_tick; secondaries must still arm timeouts on
+	 * wheel 0 so sleep / notif_wait_timeout can expire, then IPI wakes
+	 * the remote thread (same path as a local expire + enqueue).
+	 */
+	return 0u;
+#endif
 }
 
 void ulmk_arch_cache_enable(void)

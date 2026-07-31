@@ -411,10 +411,11 @@ uint32_t ulmk_arch_timer_wheel_cpu(void);
   each secondary CPU entry on arches with a per-hart timer.
 - `tick_ack` — clear/re-arm the compare from the tick ISR path.
 - `timer_wheel_cpu` — index of the timing wheel used by `ulmk_timer_add` /
-  `ulmk_timer_tick` on this hart.  All current ports return
-  `ulmk_arch_cpu_id()` (local tick → per-CPU wheel).  TriCore uses STM0/1/2
-  CMP0 + `SRC_STMx_SR0` per core; remote enqueue still uses GPSR IPI for a
-  prompt wake.
+  `ulmk_timer_tick` on this hart.  Ports with a **per-CPU** hardware tick
+  (TriCore STM0/1/2, RISC-V CLINT `mtimecmp`) return `ulmk_arch_cpu_id()`.
+  Ports with a **shared** tick (ESP32-P4 SYSTIMER, only CPU0 armed) must
+  return `0` so secondary `ulmk_sleep_ms` / `notif_wait_timeout` still
+  expire; remote enqueue still uses IPI for a prompt wake.
 
 ### `ulmk_arch_irq_src_register`
 
