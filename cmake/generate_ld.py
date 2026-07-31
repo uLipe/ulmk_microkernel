@@ -98,19 +98,29 @@ def main():
     if flags["HAVE_BMHD"] and os.path.exists(bmhd_path):
         out.append(read_fragment(bmhd_path))
 
-    # 4a. Vectors — arch-specific when present (RISC-V trap section)
+    # 4a. Vectors — chip may override to place them somewhere other than
+    #     KERNEL_FLASH (e.g. XIP parts running them from RAM); otherwise
+    #     arch-specific when present (RISC-V trap section)
+    vectors_chip = os.path.join(args.chip_dir, "vectors.ld.in")
     vectors_arch = os.path.join(args.arch_dir, "vectors.ld.in")
     vectors_kernel = os.path.join(args.kernel_dir, "vectors.ld.in")
     vectors_tables = os.path.join(args.kernel_dir, "vectors_tables.ld.in")
-    if os.path.exists(vectors_arch):
+    if os.path.exists(vectors_chip):
+        out.append(read_fragment(vectors_chip))
+    elif os.path.exists(vectors_arch):
         out.append(read_fragment(vectors_arch))
     elif flags["HAVE_BMHD"] and os.path.exists(vectors_tables):
         out.append(read_fragment(vectors_tables))
     else:
         out.append(read_fragment(vectors_kernel))
 
-    # 4b. Kernel text (libulmk_kernel.a only)
-    out.append(read_fragment(os.path.join(args.kernel_dir, "kernel_text.ld.in")))
+    # 4b. Kernel text (libulmk_kernel.a only) — chip may override for RAM VMA
+    kt = os.path.join(args.chip_dir, "kernel_text.ld.in")
+    if os.path.exists(kt):
+        out.append(read_fragment(kt))
+    else:
+        out.append(read_fragment(os.path.join(args.kernel_dir,
+                                              "kernel_text.ld.in")))
 
     # 4c. Userspace text lower bound (per-component sections follow)
     out.append("    _ulmk_user_text_start = .;\n")
