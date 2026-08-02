@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdarg.h>
 #include <ulmk/microkernel.h>
+#include "board_config.h"
 #include "board_console.h"
 #include "board_internal.h"
 
@@ -13,17 +14,29 @@
 #define CONSOLE_WRITE_MAX	256u
 #define CONSOLE_FMT_BUF		160u
 
+static char g_console_bounce[ULMK_ARCH_NUM_CPU][CONSOLE_WRITE_MAX]
+	__attribute__((section(".user_bss")));
+
 static void console_write(const char *buf, uint32_t len)
 {
 	ulmk_msg_t msg;
 	ulmk_ep_t ep = board_service_ep();
+	uint32_t cpu;
+	uint32_t i;
+	char *dst;
 
 	if (!buf || len == 0u || ep == ULMK_EP_INVALID)
 		return;
 	if (len > CONSOLE_WRITE_MAX)
 		len = CONSOLE_WRITE_MAX;
+	cpu = ulmk_cpu_id();
+	if (cpu >= (uint32_t)ULMK_ARCH_NUM_CPU)
+		cpu = 0u;
+	dst = g_console_bounce[cpu];
+	for (i = 0u; i < len; i++)
+		dst[i] = buf[i];
 	msg.label    = CONSOLE_MSG_WRITE;
-	msg.words[0] = (uint32_t)(uintptr_t)buf;
+	msg.words[0] = (uint32_t)(uintptr_t)dst;
 	msg.words[1] = len;
 	(void)ulmk_ep_call(ep, &msg);
 }

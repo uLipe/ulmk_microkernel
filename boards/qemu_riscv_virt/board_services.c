@@ -39,7 +39,10 @@ static void board_server(void *arg)
 {
 	ulmk_msg_t msg;
 	ulmk_msg_t reply;
+	ulmk_msg_t next;
 	ulmk_tid_t sender;
+	ulmk_tid_t next_sender;
+	int rc;
 
 	(void)arg;
 
@@ -54,8 +57,11 @@ static void board_server(void *arg)
 	reply.label    = 0u;
 	reply.words[0] = 0u;
 
+	rc = ulmk_ep_recv(g_ep, &msg, &sender);
+	if (rc != ULMK_OK)
+		ulmk_thread_exit();
+
 	for (;;) {
-		ulmk_ep_recv(g_ep, &msg, &sender);
 		if (msg.label == CONSOLE_MSG_PUTC) {
 			console_putc_hw((char)(uint8_t)msg.words[0]);
 		} else if (msg.label == CONSOLE_MSG_WRITE) {
@@ -71,7 +77,12 @@ static void board_server(void *arg)
 					console_putc_hw(buf[i]);
 			}
 		}
-		ulmk_ep_reply(sender, &reply);
+		rc = ulmk_ep_reply_recv(g_ep, sender, &reply, &next,
+					&next_sender);
+		if (rc != ULMK_OK)
+			continue;
+		msg = next;
+		sender = next_sender;
 	}
 }
 
