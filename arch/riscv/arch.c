@@ -310,6 +310,22 @@ pmp_set_tor(uint8_t idx, uintptr_t lo, uintptr_t hi, uint8_t perm)
 	pmp_write_cfg(idx, perm | PMP_A_TOR);
 }
 
+/*
+ * User RAM is the one window where rounding is not a rounding error: it sits
+ * directly above kernel RAM, so a NAPOT window grown downwards to reach a
+ * power-of-two boundary hands U-mode read/write over the kernel's own data.
+ * Boards whose layout is not naturally aligned spend the slot below
+ * ULMK_ARCH_PMP_URAM on a lower bound and describe the range exactly.
+ */
+static void pmp_set_uram(uintptr_t lo, uintptr_t hi)
+{
+#if ULMK_ARCH_PMP_URAM_TOR
+	pmp_set_tor(ULMK_ARCH_PMP_URAM, lo, hi, PMP_R | PMP_W);
+#else
+	pmp_set_napot(ULMK_ARCH_PMP_URAM, lo, hi - lo, PMP_R | PMP_W);
+#endif
+}
+
 static uint8_t perms_to_pmp(uint32_t perms)
 {
 	uint8_t p = 0u;
@@ -569,8 +585,7 @@ static void pmp_kernel_layout(void)
 			      PMP_R | PMP_X);
 
 	if (uram_hi > uram_lo)
-		pmp_set_napot(ULMK_ARCH_PMP_URAM, uram_lo, uram_hi - uram_lo,
-			      PMP_R | PMP_W);
+		pmp_set_uram(uram_lo, uram_hi);
 
 	if (mmio_hi > mmio_lo)
 		pmp_set_napot(ULMK_ARCH_PMP_MMIO, mmio_lo, mmio_hi - mmio_lo,
@@ -613,15 +628,14 @@ static void pmp_user_layout(const ulmk_arch_region_t *regions, uint8_t count)
 			      PMP_R | PMP_X);
 
 	if (uram_hi > uram_lo)
-		pmp_set_napot(ULMK_ARCH_PMP_URAM, uram_lo, uram_hi - uram_lo,
-			      PMP_R | PMP_W);
+		pmp_set_uram(uram_lo, uram_hi);
 
 	if (mmio_hi > mmio_lo)
 		pmp_set_napot(ULMK_ARCH_PMP_MMIO, mmio_lo, mmio_hi - mmio_lo,
 			      PMP_R | PMP_W);
 
 	/*
-	 * STACK sits inside the static URAM NAPOT window — skip it.
+	 * STACK sits inside the static URAM window — skip it.
 	 * Dynamic domain grants use NAPOT on free slots (leave TEMP0/1 alone).
 	 */
 	slot = ULMK_ARCH_PMP_DYNAMIC_BASE;
