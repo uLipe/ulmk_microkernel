@@ -101,15 +101,23 @@ uint32_t ulmk_kern_sleep(uint32_t ms)
 	cur->block_status   = 0;
 	cur->state          = UL_THREAD_STATE_BLOCKED;
 
-	if (ulmk_timeout_arm(cur, ms, sleep_timeout_cb) != ULMK_OK) {
-		cur->state          = UL_THREAD_STATE_READY;
-		cur->blocked_reason = UL_BLOCKED_NONE;
-		ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_thread, key);
-		return (uint32_t)(int32_t)ULMK_EINVAL;
-	}
-
 	ulmk_sched_dequeue(cur);
 	ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_thread, key);
+
+	if (ulmk_timeout_arm(cur, ms, sleep_timeout_cb) != ULMK_OK) {
+		key = ulmk_arch_spin_lock_irqsave(&g_ulmk_lock_thread);
+		if (cur->state == UL_THREAD_STATE_BLOCKED &&
+		    cur->blocked_reason == UL_BLOCKED_SLEEP) {
+			cur->state          = UL_THREAD_STATE_READY;
+			cur->blocked_reason = UL_BLOCKED_NONE;
+			ulmk_sched_enqueue(cur);
+		}
+		ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_thread, key);
+#ifndef UL_UNIT_TEST
+		ulmk_sched_kick_pending();
+#endif
+		return (uint32_t)(int32_t)ULMK_EINVAL;
+	}
 	return 0u;
 }
 
@@ -130,12 +138,12 @@ uint32_t ulmk_kern_sleep_cancel(uint32_t tid)
 		return (uint32_t)(int32_t)ULMK_EINVAL;
 	}
 
-	ulmk_timeout_disarm(th);
 	th->block_status   = ULMK_ECANCELED;
 	th->blocked_reason = UL_BLOCKED_NONE;
 	th->state          = UL_THREAD_STATE_READY;
 	ulmk_sched_enqueue(th);
 	ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_thread, key);
+	ulmk_timeout_disarm(th);
 #ifndef UL_UNIT_TEST
 	ulmk_sched_request_resched();
 	ulmk_sched_kick_pending();

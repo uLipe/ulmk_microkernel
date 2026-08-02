@@ -4,6 +4,11 @@
  *
  * Lock order (never invert): thread → ipc (ep/notif) → rq → irq → timer → mem
  * RQ lock is internal to bitmap_rt (enqueue/dequeue/pick/peek).
+ *
+ * Do NOT call ulmk_timeout_arm/disarm (timer lock) while holding ipc.
+ * Kernel runs with IRQs off: a cross-CPU spin on ipc while the tick CPU
+ * also needs ipc (or the reverse via timer) stalls the only hart that
+ * advances the shared wheel / delivers board IRQs.
  */
 
 #ifndef UL_KLOCK_H

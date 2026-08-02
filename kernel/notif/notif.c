@@ -100,6 +100,7 @@ int notif_signal_impl(ulmk_notif_t notif_id, uint32_t bits)
 	ulmk_notif_obj_t *n;
 	ulmk_thread_t    *w;
 	uint32_t          delivered;
+	int               need_disarm = 0;
 #ifndef UL_UNIT_TEST
 	ulmk_arch_irq_key_t key = ulmk_arch_spin_lock_irqsave(&g_ulmk_lock_ipc);
 #endif
@@ -134,7 +135,7 @@ int notif_signal_impl(ulmk_notif_t notif_id, uint32_t bits)
 	n->waiter         = NULL;
 	w->notif_received = delivered;
 	if (w->timeout.cb)
-		ulmk_timeout_disarm(w);
+		need_disarm = 1;
 
 	if (w->blocked_reason == UL_BLOCKED_IPC_OR_NOTIF) {
 		ulmk_recv_or_notif_result_t *rn = w->rn_result_outptr;
@@ -165,6 +166,11 @@ int notif_signal_impl(ulmk_notif_t notif_id, uint32_t bits)
 	ulmk_sched_enqueue_locked(w);
 #ifndef UL_UNIT_TEST
 	ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_ipc, key);
+#endif
+	/* Timer lock must not nest under ipc (see ulmk_klock.h). */
+	if (need_disarm)
+		ulmk_timeout_disarm(w);
+#ifndef UL_UNIT_TEST
 	ulmk_sched_kick_pending();
 #endif
 	return 0;
@@ -246,16 +252,15 @@ int notif_wait_timeout_impl(ulmk_notif_t notif_id, uint32_t mask,
 	ulmk_thread_t *cur;
 	uint32_t matched;
 #ifndef UL_UNIT_TEST
-	ulmk_arch_irq_key_t key = ulmk_arch_spin_lock_irqsave(&g_ulmk_lock_ipc);
+	ulmk_arch_irq_key_t key;
 #endif
 
-	if (ulmk_ms_to_ticks(timeout_ms) == 0u) {
-#ifndef UL_UNIT_TEST
-		ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_ipc, key);
-#endif
+	if (ulmk_ms_to_ticks(timeout_ms) == 0u)
 		return -ULMK_EINVAL;
-	}
 
+#ifndef UL_UNIT_TEST
+	key = ulmk_arch_spin_lock_irqsave(&g_ulmk_lock_ipc);
+#endif
 	n = ulmk_notif_by_id(notif_id);
 	if (!n || !out) {
 #ifndef UL_UNIT_TEST
@@ -288,16 +293,6 @@ int notif_wait_timeout_impl(ulmk_notif_t notif_id, uint32_t mask,
 	cur->notif_bits_outptr = out;
 	cur->block_status      = 0;
 
-	if (ulmk_timeout_arm(cur, timeout_ms, notif_wait_timeout_cb) != ULMK_OK) {
-		cur->blocked_reason    = UL_BLOCKED_NONE;
-		cur->blocked_notif     = ULMK_NOTIF_INVALID;
-		cur->notif_bits_outptr = NULL;
-#ifndef UL_UNIT_TEST
-		ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_ipc, key);
-#endif
-		return -ULMK_EINVAL;
-	}
-
 	cur->state = UL_THREAD_STATE_BLOCKED;
 	ulmk_sched_dequeue_locked(cur);
 
@@ -308,17 +303,44 @@ int notif_wait_timeout_impl(ulmk_notif_t notif_id, uint32_t mask,
 	if (matched) {
 		n->bits   &= ~matched;
 		n->waiter  = NULL;
-		ulmk_timeout_disarm(cur);
 		cur->state = UL_THREAD_STATE_READY;
 		cur->blocked_reason = UL_BLOCKED_NONE;
 		cur->blocked_notif  = ULMK_NOTIF_INVALID;
 		ulmk_sched_enqueue_locked(cur);
 		*out = matched;
+#ifndef UL_UNIT_TEST
+		ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_ipc, key);
+#endif
+		return 0;
 	}
 
 #ifndef UL_UNIT_TEST
 	ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_ipc, key);
 #endif
+	/*
+	 * Arm after dropping ipc — never nest timer under ipc (ulmk_klock.h).
+	 * If signal already woke us, the timeout cb sees non-blocked and no-ops.
+	 */
+	if (ulmk_timeout_arm(cur, timeout_ms, notif_wait_timeout_cb) != ULMK_OK) {
+#ifndef UL_UNIT_TEST
+		key = ulmk_arch_spin_lock_irqsave(&g_ulmk_lock_ipc);
+#endif
+		if (cur->state == UL_THREAD_STATE_BLOCKED &&
+		    cur->blocked_reason == UL_BLOCKED_NOTIF &&
+		    n->waiter == cur) {
+			n->waiter = NULL;
+			cur->blocked_reason    = UL_BLOCKED_NONE;
+			cur->blocked_notif     = ULMK_NOTIF_INVALID;
+			cur->notif_bits_outptr = NULL;
+			cur->state             = UL_THREAD_STATE_READY;
+			ulmk_sched_enqueue_locked(cur);
+		}
+#ifndef UL_UNIT_TEST
+		ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_ipc, key);
+		ulmk_sched_kick_pending();
+#endif
+		return -ULMK_EINVAL;
+	}
 	return 0;
 }
 

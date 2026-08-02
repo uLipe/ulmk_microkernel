@@ -351,16 +351,6 @@ int ep_call_timeout_impl(ulmk_ep_t ep_id, ulmk_msg_t *msg,
 	cur->ipc_msg_outptr = msg;
 	cur->block_status   = 0;
 
-	if (ulmk_timeout_arm(cur, timeout_ms, ep_call_timeout_cb) != ULMK_OK) {
-		cur->blocked_reason = UL_BLOCKED_NONE;
-		cur->blocked_ep     = ULMK_EP_INVALID;
-		cur->ipc_msg_outptr = NULL;
-#ifndef UL_UNIT_TEST
-		ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_ipc, key);
-#endif
-		return -ULMK_EINVAL;
-	}
-
 	if (!sys_dlist_is_empty(&ep->recv_queue)) {
 		srv = ipc_pop_head(&ep->recv_queue);
 		prepare_server_delivery(srv, cur, msg);
@@ -373,6 +363,34 @@ int ep_call_timeout_impl(ulmk_ep_t ep_id, ulmk_msg_t *msg,
 #ifndef UL_UNIT_TEST
 	ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_ipc, key);
 #endif
+	if (ulmk_timeout_arm(cur, timeout_ms, ep_call_timeout_cb) != ULMK_OK) {
+#ifndef UL_UNIT_TEST
+		key = ulmk_arch_spin_lock_irqsave(&g_ulmk_lock_ipc);
+#endif
+		/*
+		 * Abort only if still queued as caller.  If the server already
+		 * took the request, leave the rendezvous without a timeout.
+		 */
+		if (cur->state == UL_THREAD_STATE_BLOCKED &&
+		    cur->blocked_reason == UL_BLOCKED_IPC_CALL &&
+		    sys_dnode_is_linked(&cur->ipc_node)) {
+			ulmk_ep_recv_queue_remove(cur);
+			cur->blocked_reason = UL_BLOCKED_NONE;
+			cur->ipc_msg_outptr = NULL;
+			cur->state          = UL_THREAD_STATE_READY;
+			ulmk_sched_enqueue_locked(cur);
+		}
+#ifndef UL_UNIT_TEST
+		ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_ipc, key);
+#endif
+		ulmk_sched_dequeue(cur);
+		if (srv)
+			ulmk_sched_enqueue(srv);
+#ifndef UL_UNIT_TEST
+		ulmk_sched_kick_pending();
+#endif
+		return -ULMK_EINVAL;
+	}
 	ulmk_sched_dequeue(cur);
 	if (srv)
 		ulmk_sched_enqueue(srv);
@@ -471,8 +489,6 @@ int ep_reply_impl(ulmk_tid_t sender_tid, const ulmk_msg_t *reply)
 	if (cur)
 		cur->priority = cur->saved_prio;
 
-	ulmk_timeout_disarm(caller);
-
 	/* One hop into the caller's staged buffer (or TCB bounce fallback). */
 	if (caller->ipc_msg_outptr) {
 		*caller->ipc_msg_outptr = *reply;
@@ -489,9 +505,11 @@ int ep_reply_impl(ulmk_tid_t sender_tid, const ulmk_msg_t *reply)
 	 * Enqueue after dropping IPC — same rule as ep_call waking a server.
 	 * Holding IPC across rq_lock + remote IPI deadlocks with a peer in
 	 * ep_call (IPC then RQ) and inflates cross-CPU reply WCET.
+	 * Disarm after unlock — never nest timer under ipc.
 	 */
 	ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_ipc, key);
 #endif
+	ulmk_timeout_disarm(caller);
 	ulmk_sched_enqueue(caller);
 #ifndef UL_UNIT_TEST
 	ulmk_sched_kick_pending();
@@ -507,6 +525,9 @@ int ep_reply_recv_impl(ulmk_ep_t ep_id, ulmk_tid_t sender_tid,
 	ulmk_endpoint_t *ep;
 	ulmk_thread_t   *cur;
 	ulmk_thread_t   *caller;
+#ifndef UL_UNIT_TEST
+	ulmk_arch_irq_key_t key;
+#endif
 
 	if (!next)
 		return -ULMK_EINVAL;
@@ -516,7 +537,8 @@ int ep_reply_recv_impl(ulmk_ep_t ep_id, ulmk_tid_t sender_tid,
 
 	/*
 	 * Hot path: next client already waiting — deliver without blocking.
-	 * Avoids a second pass through ep_recv_impl's full prologue.
+	 * Must hold g_ulmk_lock_ipc: ep_call enqueues under the same lock;
+	 * an unlocked pop races multi-CPU clients into a corrupted send_queue.
 	 */
 	ep = ulmk_ep_by_id(ep_id);
 	if (!ep)
@@ -526,6 +548,9 @@ int ep_reply_recv_impl(ulmk_ep_t ep_id, ulmk_tid_t sender_tid,
 	if (!cur)
 		return -ULMK_EINVAL;
 
+#ifndef UL_UNIT_TEST
+	key = ulmk_arch_spin_lock_irqsave(&g_ulmk_lock_ipc);
+#endif
 	if (!sys_dlist_is_empty(&ep->send_queue)) {
 		caller = ipc_pop_head(&ep->send_queue);
 		*next = *caller_request(caller);
@@ -533,8 +558,14 @@ int ep_reply_recv_impl(ulmk_ep_t ep_id, ulmk_tid_t sender_tid,
 		apply_prio_inherit(cur, caller);
 		if (next_sender)
 			*next_sender = caller->tid;
+#ifndef UL_UNIT_TEST
+		ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_ipc, key);
+#endif
 		return 0;
 	}
+#ifndef UL_UNIT_TEST
+	ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_ipc, key);
+#endif
 
 	return ep_recv_impl(ep_id, next, next_sender);
 }
@@ -555,6 +586,9 @@ int ep_recv_or_notif_impl(ulmk_ep_t ep_id, ulmk_notif_t notif_id,
 	ulmk_notif_obj_t *n;
 	ulmk_thread_t    *cur;
 	uint32_t        matched;
+#ifndef UL_UNIT_TEST
+	ulmk_arch_irq_key_t key;
+#endif
 
 	if (!res)
 		return -ULMK_EINVAL;
@@ -571,12 +605,18 @@ int ep_recv_or_notif_impl(ulmk_ep_t ep_id, ulmk_notif_t notif_id,
 	if (!cur)
 		return -ULMK_EINVAL;
 
+#ifndef UL_UNIT_TEST
+	key = ulmk_arch_spin_lock_irqsave(&g_ulmk_lock_ipc);
+#endif
 	matched = n->bits & mask;
 	if (matched) {
 		n->bits         &= ~matched;
 		res->is_notif    = 1;
 		res->notif_bits  = matched;
 		res->sender      = ULMK_TID_INVALID;
+#ifndef UL_UNIT_TEST
+		ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_ipc, key);
+#endif
 		return 1;
 	}
 
@@ -590,6 +630,9 @@ int ep_recv_or_notif_impl(ulmk_ep_t ep_id, ulmk_notif_t notif_id,
 		res->is_notif = 0;
 		res->msg      = cur->ipc_msg;
 		res->sender   = cur->ipc_sender;
+#ifndef UL_UNIT_TEST
+		ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_ipc, key);
+#endif
 		return 0;
 	}
 
@@ -609,6 +652,10 @@ int ep_recv_or_notif_impl(ulmk_ep_t ep_id, ulmk_notif_t notif_id,
 
 	cur->state = UL_THREAD_STATE_BLOCKED;
 	ulmk_sched_dequeue_locked(cur);
+#ifndef UL_UNIT_TEST
+	ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_ipc, key);
+	ulmk_sched_kick_pending();
+#endif
 	/*
 	 * Wake paths fill *rn_result_outptr (IPC via prepare_server_delivery,
 	 * notif via notif_signal).  Return 0 here; userspace sees the staged
@@ -621,20 +668,47 @@ int ep_destroy_impl(ulmk_ep_t ep_id)
 {
 	ulmk_endpoint_t *ep;
 	ulmk_thread_t   *th;
+#ifndef UL_UNIT_TEST
+	ulmk_arch_irq_key_t key;
+#endif
 
+#ifndef UL_UNIT_TEST
+	key = ulmk_arch_spin_lock_irqsave(&g_ulmk_lock_ipc);
+#endif
 	ep = ulmk_ep_by_id(ep_id);
-	if (!ep)
+	if (!ep) {
+#ifndef UL_UNIT_TEST
+		ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_ipc, key);
+#endif
 		return -ULMK_EINVAL;
-
-	while ((th = ipc_pop_head(&ep->send_queue)) != NULL)
-		wake_blocked_on_destroy(th, ULMK_EINVAL);
-
-	while ((th = ipc_pop_head(&ep->recv_queue)) != NULL)
-		wake_blocked_on_destroy(th, ULMK_EINVAL);
+	}
 
 	ep->active = false;
+
+	while ((th = ipc_pop_head(&ep->send_queue)) != NULL) {
 #ifndef UL_UNIT_TEST
+		ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_ipc, key);
+#endif
+		wake_blocked_on_destroy(th, ULMK_EINVAL);
+#ifndef UL_UNIT_TEST
+		key = ulmk_arch_spin_lock_irqsave(&g_ulmk_lock_ipc);
+#endif
+	}
+
+	while ((th = ipc_pop_head(&ep->recv_queue)) != NULL) {
+#ifndef UL_UNIT_TEST
+		ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_ipc, key);
+#endif
+		wake_blocked_on_destroy(th, ULMK_EINVAL);
+#ifndef UL_UNIT_TEST
+		key = ulmk_arch_spin_lock_irqsave(&g_ulmk_lock_ipc);
+#endif
+	}
+
+#ifndef UL_UNIT_TEST
+	ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_ipc, key);
 	ulmk_heap_free(ep);
+	ulmk_sched_kick_pending();
 #endif
 	return 0;
 }
