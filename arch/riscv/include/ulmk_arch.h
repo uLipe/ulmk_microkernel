@@ -157,12 +157,13 @@ uint32_t ulmk_arch_timer_wheel_cpu(void);
 void ulmk_arch_syscall_entry(void);
 void ulmk_arch_trap_entry(uint8_t trap_class, uint8_t tin);
 void ulmk_arch_trap_dump(uint8_t trap_class, uint8_t tin);
-
 void ulmk_printk_char_out(char c);
 
 void ulmk_kern_irq_dispatch(uint8_t srpn);
 void ulmk_kern_ipi_resched(void);
 void ulmk_kern_timer_tick(void);
+/* Advance the timing wheel only; HW must already be acked.  No sched. */
+void ulmk_kern_timer_pulse(void);
 void ulmk_kern_sched_dispatch(bool from_isr);
 void ulmk_kern_secondary_main(void);
 uint32_t ulmk_kern_syscall_ret_resolve(uint32_t ret);

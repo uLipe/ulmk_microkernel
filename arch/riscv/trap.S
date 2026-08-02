@@ -129,11 +129,11 @@ _trap_handler:
 	lw      t0, TF_MCAUSE(sp)
 #if ULMK_ARCH_HAVE_CLIC
 	/*
-	 * ISRs call riscv_clic_drop_mil() before any switch.  mret reloads
-	 * MIL from mcause.MPIL only when interrupt=1; a stale pre-handler
-	 * level here would raise MIL again and mask the tick.  Clear MPIL
-	 * on interrupt exits only — never force the interrupt bit (that
-	 * breaks exception/ecall mret).
+	 * Clear MPIL on interrupt-saved frames so this mret drops MIL.
+	 * Do not forge interrupt=1 onto ecall frames — Espressif CLIC
+	 * treats that mismatched mret as corruption.  ISR paths call
+	 * riscv_clic_drop_mil() before sched so MIL is already base when
+	 * a switched-to ecall frame returns.
 	 */
 	bgez    t0, 4f
 	li      t1, 0xFF00FFFF

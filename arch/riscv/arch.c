@@ -1104,14 +1104,12 @@ void ulmk_arch_tick_init(uint32_t tick_hz)
 
 void ulmk_arch_tick_ack(void)
 {
-	ulmk_board_tick_ack();
-#if ULMK_ARCH_HAVE_CLIC
 	/*
-	 * Lower MIL before sched_dispatch inside ulmk_kern_timer_tick so a
-	 * preempting switch cannot abandon mret with mintstatus elevated.
+	 * HW only.  CLIC mintstatus.MIL is dropped once at the end of
+	 * riscv_clic_dispatch after the pending drain — not here — so a
+	 * mid-drain tick pulse cannot leave peers masked or double-mret.
 	 */
-	riscv_clic_drop_mil();
-#endif
+	ulmk_board_tick_ack();
 }
 
 #endif /* ULMK_ARCH_HAVE_CLINT */

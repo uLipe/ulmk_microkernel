@@ -55,10 +55,15 @@ void ulmk_kern_ipi_from_isr(void)
 }
 #endif
 
+void ulmk_kern_timer_pulse(void)
+{
+	ulmk_timer_tick();
+}
+
 void ulmk_kern_timer_tick(void)
 {
 	ulmk_arch_tick_ack();
-	ulmk_timer_tick();
+	ulmk_kern_timer_pulse();
 	if (!ulmk_percpu()->current)
 		return;
 	ulmk_kern_sched_dispatch(true);

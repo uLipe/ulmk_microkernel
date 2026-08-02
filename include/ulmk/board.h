@@ -53,8 +53,10 @@ void ulmk_board_irq_disconnect(uint8_t srpn);
 #if ULMK_CONFIG_BOARD_IRQ_CLAIM
 /*
  * Offered every interrupt before the generic dispatch path.  Return true if
- * the board fully handled it (the tick, typically), false to let the kernel
- * dispatch and acknowledge it as a driver binding.
+ * the board owns the line (tick / IPI), false for a driver binding.
+ *
+ * Soft work only: HW ack + wheel pulse / resched request.  Do not drop MIL
+ * or call sched_dispatch — the CLIC drain loop owns those once.
  */
 bool ulmk_board_irq_claim(uint32_t irq);
 #endif
