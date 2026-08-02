@@ -38,6 +38,7 @@ typedef struct {
 #define ULMK_REGION_HEAP	3
 #define ULMK_REGION_PERIPH	4
 #define ULMK_REGION_SHARED	5
+#define ULMK_REGION_GRANT	6
 
 ulmk_arch_irq_key_t ulmk_arch_cpu_irq_save(void);
 void              ulmk_arch_cpu_irq_restore(ulmk_arch_irq_key_t key);

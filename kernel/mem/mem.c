@@ -211,8 +211,18 @@ uint32_t ulmk_kern_mem_grant(uint32_t addr, uint32_t size,
 	/* Grant read-only by default; caller may not grant more perms than held */
 	uint32_t granted_perms = perms & r->perms;
 
+	/*
+	 * The alias must carry the owner's memory attributes: an arch that
+	 * derives cacheability from the type would otherwise give the two
+	 * views of one page different policies, and on a core without cache
+	 * coherency each side then reads its own stale copy.  Only heap
+	 * becomes GRANT, so unmapping the alias never frees the owner's block.
+	 */
+	uint8_t granted_type = (r->type == ULMK_REGION_HEAP) ?
+			       ULMK_REGION_GRANT : r->type;
+
 	rc = thread_add_region(target, (uintptr_t)addr, r->size,
-			       granted_perms, ULMK_REGION_SHARED);
+			       granted_perms, granted_type);
 	return (rc == ULMK_OK) ? (uint32_t)ULMK_OK : (uint32_t)(int32_t)rc;
 }
 

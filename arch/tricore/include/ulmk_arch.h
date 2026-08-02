@@ -65,6 +65,7 @@ typedef struct {
 #define ULMK_REGION_HEAP		3
 #define ULMK_REGION_PERIPH	4
 #define ULMK_REGION_SHARED	5
+#define ULMK_REGION_GRANT	6
 
 /* =========================================================================
  * CPU control (arch_api_spec.md §5)

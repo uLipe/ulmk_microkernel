@@ -58,6 +58,7 @@ typedef struct {
 #define ULMK_REGION_HEAP		3
 #define ULMK_REGION_PERIPH	4
 #define ULMK_REGION_SHARED	5
+#define ULMK_REGION_GRANT	6
 
 /* Context — forward declarations; test file provides implementations */
 void ulmk_arch_ctx_switch(ulmk_arch_ctx_t *from, ulmk_arch_ctx_t *to);
