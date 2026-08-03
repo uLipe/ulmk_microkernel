@@ -277,11 +277,13 @@ boards/qemu_riscv_virt/      RISC-V QEMU virt CI board
 boards/qemu_mps2_an500/      ARMv7-M Cortex-M7 QEMU CI board
 boards/qemu_mps2_an505/      ARMv8-M Cortex-M33 QEMU CI board
 components/hello_world/      reference ROOT_THREAD component (default OFF)
+components/ulmk_device_manager/  QNX-style userspace device manager (mechanism)
+                             # class contracts + demos in sibling ../ulmk_apps/
                              # ping_pong lives in sibling ../ulmk_apps/ping_pong/
 include/ulmk/microkernel.h     public API (all syscall wrappers)
 linker/                      arch-independent linker fragments
 stub/                        documentation-only stub templates
-tests/                       integration tests (standalone Makefiles)
+tests/                       unit + sdk_suite (standalone Makefiles)
 tools/dev.py                 container frontend
 docs/                        specifications and guides
 ```
@@ -296,6 +298,7 @@ docs/                        specifications and guides
 | [arch\_api\_spec](docs/arch_api_spec.md) | Architecture abstraction layer contract |
 | [build\_system\_spec](docs/build_system_spec.md) | CMake build model and component discovery |
 | [component\_spec](docs/component_spec.md) | Component system design |
+| [device\_manager\_spec](docs/device_manager_spec.md) | Userspace device manager (mechanism vs policy) |
 | [linker\_spec](docs/linker_spec.md) | Three-layer linker script model |
 | [application\_development\_guide](docs/application_development_guide.md) | How to build an application for custom hardware |
 | [arch\_porting\_guide](docs/arch_porting_guide.md) | How to add a new architecture |
