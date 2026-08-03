@@ -112,7 +112,14 @@ function(_ulmk_finalize_build kernel_target chip_dir)
     add_dependencies("${kernel_target}" ulmk_linker_script)
 
     # Link every registered component library into the final executable.
+    # SDK mode only builds them (shipped separately); the stub validation ELF
+    # must not pull in ROOT_THREAD symbols from a component archive.
     foreach(comp IN LISTS _ULMK_COMPONENTS)
-        target_link_libraries("${kernel_target}" PRIVATE "ulmk_comp_${comp}")
+        if(ULMK_SDK)
+            add_dependencies("${kernel_target}" "ulmk_comp_${comp}")
+        else()
+            target_link_libraries("${kernel_target}" PRIVATE
+                "ulmk_comp_${comp}")
+        endif()
     endforeach()
 endfunction()

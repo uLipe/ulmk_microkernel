@@ -158,18 +158,19 @@ ulmk_apply_kernel_opt(ULMK_ARCH_EXE_SOURCES)
 
 message(STATUS "ULMK_ARCH=${ULMK_ARCH}  ULMK_CHIP_DIR=${ULMK_CHIP_DIR}")
 
-# Components and apps are userspace policy — never part of the distributable
-# kernel SDK, which ships only kernel + arch + board.
-if(NOT ULMK_SDK)
-    file(GLOB _kernel_comp_dirs LIST_DIRECTORIES true
-        "${CMAKE_SOURCE_DIR}/components/*")
-    foreach(_dir IN LISTS _kernel_comp_dirs)
-        if(IS_DIRECTORY "${_dir}" AND EXISTS "${_dir}/CMakeLists.txt")
-            get_filename_component(_cname "${_dir}" NAME)
-            add_subdirectory("${_dir}" "${CMAKE_BINARY_DIR}/components/${_cname}")
-        endif()
-    endforeach()
+# In-tree components are scanned in both modes.  In SDK builds, enabled ones
+# become shipped archives (libulmk_comp_*); the validation ELF still uses the
+# stub root thread.  Board and sibling-app components stay out of the SDK.
+file(GLOB _kernel_comp_dirs LIST_DIRECTORIES true
+    "${CMAKE_SOURCE_DIR}/components/*")
+foreach(_dir IN LISTS _kernel_comp_dirs)
+    if(IS_DIRECTORY "${_dir}" AND EXISTS "${_dir}/CMakeLists.txt")
+        get_filename_component(_cname "${_dir}" NAME)
+        add_subdirectory("${_dir}" "${CMAKE_BINARY_DIR}/components/${_cname}")
+    endif()
+endforeach()
 
+if(NOT ULMK_SDK)
     # Board-local demos (pins, pot, kit LEDs) live next to the BSP.
     if(DEFINED ULMK_CHIP_DIR AND IS_DIRECTORY "${ULMK_CHIP_DIR}/components")
         file(GLOB _board_comp_dirs LIST_DIRECTORIES true
@@ -194,8 +195,13 @@ if(NOT ULMK_SDK)
             endif()
         endforeach()
     endif()
+endif()
 
-    ulmk_components_finalize()
+ulmk_components_finalize()
+
+# SDK validation ELF must never adopt a component ROOT_THREAD.
+if(ULMK_SDK)
+    set(_ULMK_ROOT_THREAD_COMP "" CACHE INTERNAL "")
 endif()
 
 # ---------------------------------------------------------------------------

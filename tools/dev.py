@@ -274,13 +274,28 @@ def _save_components_conf(enabled: set[str]) -> None:
 def _resolve_enabled_components(
     cli_components: list[str] | None,
     no_components: bool,
+    board_host: Path | None = None,
 ) -> set[str]:
     if no_components:
-        return set(cli_components or [])
+        enabled = set(cli_components or [])
+    else:
+        enabled = _load_components_conf()
+        for name in cli_components or []:
+            enabled.add(name)
 
-    enabled = _load_components_conf()
-    for name in cli_components or []:
-        enabled.add(name)
+    # Pull in REQUIRES transitively so --no-components --component foo
+    # still builds foo's dependencies (e.g. silicon_* → ulmk_device_manager).
+    by_name = {c["name"]: c for c in _discover_components(board_host)}
+    pending = list(enabled)
+    while pending:
+        name = pending.pop()
+        info = by_name.get(name)
+        if not info:
+            continue
+        for dep in info.get("requires") or []:
+            if dep not in enabled:
+                enabled.add(dep)
+                pending.append(dep)
     return enabled
 
 
@@ -648,6 +663,7 @@ def _run_build(args: argparse.Namespace) -> None:
     enabled = _resolve_enabled_components(
         getattr(args, "components", None),
         getattr(args, "no_components", False),
+        board_host,
     )
     component_flags = _component_cmake_flags(enabled, board_host)
     if "silicon_wcet" in enabled:
@@ -970,6 +986,7 @@ def _run_tests(args: argparse.Namespace) -> None:
         if json_dir:
             cmd += ["--volume", f"{Path(json_dir).resolve()}:/test-results"]
             cmd += docker_env
+        cmd += _apps_mount()
         cmd += [IMAGE_NAME, "/bin/bash", "-c", shell_cmd]
         os.execvp("docker", cmd)
     else:
@@ -989,6 +1006,7 @@ def _run_tests(args: argparse.Namespace) -> None:
         if json_dir:
             cmd += ["--volume", f"{Path(json_dir).resolve()}:/test-results"]
             cmd += docker_env
+        cmd += _apps_mount()
         cmd += [IMAGE_NAME, "/bin/bash", "-c", shell_cmd]
         os.execvp("docker", cmd)
 

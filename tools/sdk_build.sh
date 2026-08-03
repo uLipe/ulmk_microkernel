@@ -10,6 +10,7 @@
 # Produces a self-contained tree under <out-dir>:
 #   lib/ulmk_kernel_<arch>_<board>_gcc.a   kernel + arch (CPR0 / supervisor)
 #   lib/ulmk_board_<arch>_<board>_gcc.a    board + startup + vectors + user_entry
+#   lib/ulmk_comp_<name>_<tag>.a           enabled in-tree component archives
 #   linker/linker_<arch>_<board>_gcc.ld    processed linker script
 #   include/ulmk/*.h                       public microkernel API
 #   include/ulmk_syscall_abi.h             arch-provided ABI (redirected to by
@@ -17,6 +18,7 @@
 #   include/board/*.h                      public board API: chip headers plus
 #                                          every drivers/*/include header
 #                                          (no *internal* headers)
+#   include/component/<name>/*.h           public headers of enabled components
 #
 # Must run inside the dev container (needs cmake, ninja and the cross toolchains).
 
@@ -96,6 +98,10 @@ IRQ_ATTACH_FLAG=""
 if [ "$ENABLE_IRQ_ATTACH" -eq 1 ]; then
 	IRQ_ATTACH_FLAG="-DULMK_CONFIG_IRQ_ATTACH=1"
 fi
+# Library components (ENABLED OFF by default) that consumers expect in the
+# SDK tree.  Pass extra -DULMK_COMP_<name>_ENABLED=ON here to package more.
+COMP_ENABLE_FLAGS="-DULMK_COMP_ulmk_device_manager_ENABLED=ON"
+
 cmake -S "$WORKSPACE" -B "$BUILD_DIR" \
 	-DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
 	-DULMK_CHIP_DIR="$CHIP_DIR" \
@@ -103,6 +109,7 @@ cmake -S "$WORKSPACE" -B "$BUILD_DIR" \
 	${OPT_SIZE_FLAG} \
 	${SMP_FLAG} \
 	${IRQ_ATTACH_FLAG} \
+	${COMP_ENABLE_FLAGS} \
 	-GNinja \
 	--no-warn-unused-cli
 
@@ -112,15 +119,37 @@ ninja -C "$BUILD_DIR" ulmk
 echo "--- assemble SDK tree ---"
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR/lib" "$OUT_DIR/include/ulmk" "$OUT_DIR/include/board" \
-	"$OUT_DIR/linker"
+	"$OUT_DIR/include/component" "$OUT_DIR/linker"
 
 cp "$BUILD_DIR/libulmk_kernel.a" "$OUT_DIR/lib/$KERNEL_A"
 cp "$BUILD_DIR/libulmk_board.a"  "$OUT_DIR/lib/$BOARD_A"
 
-# The processed linker script selects kernel sections by archive name;
-# rewrite it to match the shipped archive filename.
-sed "s/libulmk_kernel\.a/$KERNEL_A/g" \
-	"$BUILD_DIR/generated/ulmk.ld" > "$OUT_DIR/linker/$LD"
+# Enabled component archives → libulmk_comp_<name>_<TAG>.a
+COMP_NAMES=""
+COMP_SED_ARGS=()
+while IFS= read -r -d '' a; do
+	base="$(basename "$a")"
+	# skip already-tagged copies if re-run against a polluted tree
+	case "$base" in
+	*_"${TAG}".a) continue;;
+	esac
+	name="${base#libulmk_comp_}"
+	name="${name%.a}"
+	shipped="libulmk_comp_${name}_${TAG}.a"
+	cp "$a" "$OUT_DIR/lib/$shipped"
+	COMP_SED_ARGS+=(-e "s/libulmk_comp_${name}\\.a/${shipped}/g")
+	COMP_NAMES="${COMP_NAMES} ${name}"
+done < <(find "$BUILD_DIR" -name 'libulmk_comp_*.a' -print0)
+
+# The processed linker script selects sections by archive name; rewrite
+# kernel + component archive basenames to the shipped tagged filenames.
+if [ ${#COMP_SED_ARGS[@]} -gt 0 ]; then
+	sed -e "s/libulmk_kernel\.a/$KERNEL_A/g" "${COMP_SED_ARGS[@]}" \
+		"$BUILD_DIR/generated/ulmk.ld" > "$OUT_DIR/linker/$LD"
+else
+	sed -e "s/libulmk_kernel\.a/$KERNEL_A/g" \
+		"$BUILD_DIR/generated/ulmk.ld" > "$OUT_DIR/linker/$LD"
+fi
 
 # Public microkernel API headers.
 cp "$WORKSPACE"/include/ulmk/*.h "$OUT_DIR/include/ulmk/"
@@ -147,6 +176,20 @@ for h in "$CHIP_DIR"/drivers/*/include/*.h; do
 	DRIVER_HDRS=$((DRIVER_HDRS + 1))
 done
 
+# Public headers for each enabled (shipped) component.
+COMP_HDRS=0
+for name in $COMP_NAMES; do
+	incdir="$WORKSPACE/components/$name/include"
+	[ -d "$incdir" ] || continue
+	mkdir -p "$OUT_DIR/include/component/$name"
+	for h in "$incdir"/*; do
+		[ -e "$h" ] || continue
+		case "$(basename "$h")" in *internal*) continue;; esac
+		cp -r "$h" "$OUT_DIR/include/component/$name/"
+		COMP_HDRS=$((COMP_HDRS + 1))
+	done
+done
+
 echo "--- verify SDK ---"
 ar t "$OUT_DIR/lib/$KERNEL_A" >/dev/null
 ar t "$OUT_DIR/lib/$BOARD_A" >/dev/null
@@ -154,6 +197,13 @@ grep -q "$KERNEL_A" "$OUT_DIR/linker/$LD"
 ! grep -q "libulmk_kernel\.a" "$OUT_DIR/linker/$LD"
 test -f "$OUT_DIR/include/ulmk/microkernel.h"
 test -f "$OUT_DIR/include/ulmk_syscall_abi.h"
+
+for name in $COMP_NAMES; do
+	test -f "$OUT_DIR/lib/libulmk_comp_${name}_${TAG}.a"
+	ar t "$OUT_DIR/lib/libulmk_comp_${name}_${TAG}.a" >/dev/null
+	grep -q "libulmk_comp_${name}_${TAG}\\.a" "$OUT_DIR/linker/$LD"
+	! grep -qE "libulmk_comp_${name}\\.a" "$OUT_DIR/linker/$LD"
+done
 
 # A board that compiles drivers into the archive has to publish their API.
 # Guarded rather than piping a failing find: under pipefail its exit status
@@ -171,4 +221,5 @@ fi
 echo "SDK ready → $OUT_DIR"
 echo "  lib/     $(ls "$OUT_DIR/lib")"
 echo "  linker/  $(ls "$OUT_DIR/linker")"
-echo "  include/ ulmk/ + ulmk_syscall_abi.h + board/ ($DRIVER_HDRS driver APIs)"
+echo "  include/ ulmk/ + ulmk_syscall_abi.h + board/ ($DRIVER_HDRS driver APIs)" \
+	"+ component/ ($COMP_HDRS headers for:${COMP_NAMES:- none})"
