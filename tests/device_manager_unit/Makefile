@@ -3,14 +3,11 @@ ROOT    := ../..
 TARGET  := device_manager_unit_test
 STUBINC := include
 COMP    := $(ROOT)/components/ulmk_device_manager
-# Host: sibling ../ulmk_apps.  Container (dev.py): mounted at /ulmk_apps.
-CLASSES := $(firstword \
-	$(wildcard $(ROOT)/../ulmk_apps/ulmk_device_classes) \
-	$(wildcard /ulmk_apps/ulmk_device_classes))
-
-ifeq ($(CLASSES),)
-$(error ulmk_device_classes not found (expected ../ulmk_apps or /ulmk_apps))
-endif
+# Prefer apps policy headers; fall back to in-tree fixtures (CI has no apps).
+CLASSES_INC := $(firstword \
+	$(wildcard $(ROOT)/../ulmk_apps/ulmk_device_classes/include) \
+	$(wildcard /ulmk_apps/ulmk_device_classes/include) \
+	$(ROOT)/tests/device_manager_common/include)
 
 CFLAGS := \
 	-std=c99 \
@@ -20,7 +17,7 @@ CFLAGS := \
 	-I$(STUBINC) \
 	-I$(COMP)/include \
 	-I$(COMP)/src \
-	-I$(CLASSES)/include \
+	-I$(CLASSES_INC) \
 	-g -O0
 
 SRCS := \

@@ -9,8 +9,10 @@ CASE_SRCS = root_thread.c \
 	$(WS)/components/ulmk_device_manager/src/client.c
 EXTRA_CFLAGS = -I$(WS)/components/ulmk_device_manager/include \
 	-I$(WS)/components/ulmk_device_manager/src \
-	-I$(firstword $(wildcard $(WS)/../ulmk_apps/ulmk_device_classes/include) \
-		$(wildcard /ulmk_apps/ulmk_device_classes/include))
+	-I$(firstword \
+		$(wildcard $(WS)/../ulmk_apps/ulmk_device_classes/include) \
+		$(wildcard /ulmk_apps/ulmk_device_classes/include) \
+		$(WS)/tests/device_manager_common/include)
 SENTINELS := "device_manager: PASS"
 FAIL_SENTINEL := "device_manager: FAIL"
 QEMU_TIMEOUT := 40
