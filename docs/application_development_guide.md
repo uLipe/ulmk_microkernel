@@ -21,8 +21,9 @@
 10. [Output Artefacts](#10-output-artefacts)
 11. [Running on QEMU](#11-running-on-qemu)
 12. [Running on Real Hardware](#12-running-on-real-hardware)
-13. [Worked Example](#13-worked-example)
-14. [SDK Mode — Integrating ulmk into an External Toolchain](#14-sdk-mode--integrating-ulmk-into-an-external-toolchain)
+13. [Device Manager (pathname I/O)](#13-device-manager-pathname-io)
+14. [Worked Example](#14-worked-example)
+15. [SDK Mode — Integrating ulmk into an External Toolchain](#15-sdk-mode--integrating-ulmk-into-an-external-toolchain)
 
 ---
 
@@ -640,7 +641,41 @@ After flashing:
 
 ---
 
-## 13. Worked Example
+## 13. Device Manager (pathname I/O)
+
+Full specification: [`docs/device_manager_spec.md`](device_manager_spec.md).
+
+### Mechanism vs policy
+
+| In the **kernel** repo (`ulmk`) | Outside (`ulmk_apps` / board) |
+|--------------------------------|-------------------------------|
+| `ulmk_device_manager` component | `ulmk_device_classes` (display, input, can, …) |
+| `ulmk_open` / `read` / `write` / `ioctl` | Class ioctl codes and helpers |
+| `ulmk_dev_ops` + `ulmk_dev_serve` | Board `drivers/*_dm/` adapters |
+
+Do **not** add class headers under `ulmk/components/`.
+
+### App sketch
+
+```c
+#include <ulmk_device.h>
+#include <ulmk_device_display.h>   /* from ulmk_device_classes */
+
+board_devices_register();         /* board: dm_init + ulmk_dev_register */
+ulmk_open("/dev/disp0", &disp);
+ulmk_disp_write_present(&disp, fb, rects, n);
+```
+
+CMake: `REQUIRES ulmk_device_manager ulmk_device_classes`.
+
+### Writing a board adapter
+
+1. Keep legacy `drivers/foo/` for old demos.
+2. Add `drivers/foo_dm/` — one thread, `ulmk_dev_serve`, ops call legacy clients.
+3. Register `/dev/foo0` from `board_devices_*` or the demo root.
+4. Put DM BSS in `.user_bss` on TriCore; never call `foo_init()` from inside an ops handler that is already serving an `ep_call`.
+
+## 14. Worked Example
 
 Create a minimal application that blinks an LED via a driver component.
 
@@ -825,7 +860,7 @@ python3 tools/dev.py run
 
 ---
 
-## 14. SDK Mode — Integrating ulmk into an External Toolchain
+## 15. SDK Mode — Integrating ulmk into an External Toolchain
 
 Everything above builds a **single ELF from the kernel sources** using ulmk's
 own CMake/dev.py flow.  That is the right model when ulmk owns the build.
