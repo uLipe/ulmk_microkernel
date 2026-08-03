@@ -715,6 +715,20 @@ static inline int ulmk_mem_grant(void *addr, size_t size,
 }
 
 /**
+ * @brief Revoke a previously granted memory region from a peer thread.
+ * @param addr   Base address passed to ulmk_mem_grant().
+ * @param target Thread whose access is being revoked.
+ * @return @c ULMK_OK, @c ULMK_EPERM (caller does not own the region),
+ *         @c ULMK_ESRCH (target gone), or @c ULMK_EINVAL.
+ */
+static inline int ulmk_mem_revoke(void *addr, ulmk_tid_t target)
+{
+	uint32_t r;
+	ULMK_SYSCALL_2(ULMK_SYS_MEM_REVOKE, addr, target, r);
+	return (int)r;
+}
+
+/**
  * @brief Clean D-cache lines covering [@p addr, @p addr+@p size).
  * @param size  Byte length; pass 0 to clean the entire D-cache (set/way).
  * @pre @c ULMK_PRIV_DRIVER.

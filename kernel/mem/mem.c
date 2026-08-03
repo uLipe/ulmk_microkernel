@@ -226,6 +226,36 @@ uint32_t ulmk_kern_mem_grant(uint32_t addr, uint32_t size,
 	return (rc == ULMK_OK) ? (uint32_t)ULMK_OK : (uint32_t)(int32_t)rc;
 }
 
+uint32_t ulmk_kern_mem_revoke(uint32_t addr, uint32_t target_tid)
+{
+	ulmk_thread_t *target;
+	ulmk_thread_t *cur = ulmk_sched_current();
+	uint8_t i;
+	int rc;
+
+	if (!cur || addr == 0u)
+		return (uint32_t)(int32_t)ULMK_EINVAL;
+
+	for (i = 0u; i < cur->region_count; i++) {
+		if ((uint32_t)cur->regions[i].base == addr)
+			break;
+	}
+	if (i >= cur->region_count)
+		return (uint32_t)(int32_t)ULMK_EPERM;
+
+	target = ulmk_thread_by_tid((ulmk_tid_t)target_tid);
+	if (!target)
+		return (uint32_t)(int32_t)ULMK_ESRCH;
+
+	/*
+	 * Drop the peer's alias only.  MPU for the peer is refreshed on its
+	 * next sched switch (same lazy path as grant); do not mpu_switch here
+	 * — that would reprogram this CPU's windows for the peer's list.
+	 */
+	rc = thread_remove_region(target, (uintptr_t)addr);
+	return (rc == ULMK_OK) ? (uint32_t)ULMK_OK : (uint32_t)(int32_t)rc;
+}
+
 /*
  * ulmk_kern_heap_extend — allocate an additional slab from user_pool and
  * add it as a new MPU DPR for the calling thread.

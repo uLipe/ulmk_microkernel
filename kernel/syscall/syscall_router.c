@@ -71,6 +71,9 @@ uint32_t ulmk_syscall_router(uint32_t nr,
 	case ULMK_SYS_MEM_GRANT:
 		return ulmk_kern_mem_grant(a0, a1, a2, a3);
 
+	case ULMK_SYS_MEM_REVOKE:
+		return ulmk_kern_mem_revoke(a0, a1);
+
 	case ULMK_SYS_DCACHE_CLEAN:
 		REQUIRE_DRIVER(a0);
 #if ULMK_ARCH_HAS_CACHE

@@ -37,6 +37,7 @@ uint32_t ulmk_kern_mem_map(uint32_t hint, uint32_t size,
 uint32_t ulmk_kern_mem_unmap(uint32_t addr, uint32_t size);
 uint32_t ulmk_kern_mem_grant(uint32_t addr, uint32_t size,
 			   uint32_t target_tid, uint32_t perms);
+uint32_t ulmk_kern_mem_revoke(uint32_t addr, uint32_t target_tid);
 /* Per-thread heap (slabAO model) */
 uint32_t ulmk_kern_heap_extend(uint32_t size);
 uint32_t ulmk_kern_get_thread_heap(uint32_t info_ptr);
