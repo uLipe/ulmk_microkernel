@@ -33,6 +33,8 @@ typedef int32_t ulmk_notif_t;
 #define ULMK_CAP_IRQ		(1u << 2)
 #define ULMK_CAP_MAP_PERIPH	(1u << 3)
 #define ULMK_CAP_ALL		0xFFu
+#define ULMK_CAP_INHERIT	0u
+#define ULMK_CAP_NONE		(1u << 31)
 
 /* Memory permissions */
 #define ULMK_PERM_READ	(1u << 0)
@@ -61,13 +63,8 @@ typedef struct {
 	uint8_t		 priority;
 	size_t		 stack_size;
 	ulmk_privilege_t	 privilege;
-	size_t		 heap_size;
+	uint32_t	 caps;
 	uint8_t		 cpu;
 } ulmk_thread_attr_t;
-
-typedef struct {
-	uintptr_t base;
-	size_t    size;
-} ulmk_heap_info_t;
 
 #endif /* ULMK_MICROKERNEL_H */

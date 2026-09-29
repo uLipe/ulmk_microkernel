@@ -317,69 +317,72 @@ void ulmk_heap_free(void *ptr)
  * Aligned allocation.  Every TLSF block is 64-byte aligned; alignments ≤ 64
  * are satisfied by the base allocator at no extra cost.
  *
- * For align > TLSF_HDR: allocate @size + @align extra bytes so that an
- * aligned sub-block can be carved out.  The prefix (unused bytes before the
- * aligned payload) is split off as a new free block.  A TLSF_HDR-sized
- * header is placed immediately before the aligned payload; the caller MUST
- * free the pointer returned by this function (NOT the raw allocation).
+ * For align > TLSF_HDR the payload is carved out of a larger free block: the
+ * lead in front of it becomes a free block of its own (so it needs room for
+ * a header plus a minimum payload) and the tail past it is split off as in
+ * ulmk_heap_alloc().  The result is an ordinary block for ulmk_heap_free().
  */
 void *ulmk_heap_aligned_alloc(size_t align, size_t size)
 {
+	ulmk_arch_irq_key_t key;
 	blk_t    *blk;
-	blk_t    *prefix;
-	uint8_t  *raw;
-	uintptr_t payload_start;
-	uintptr_t aligned_payload;
-	size_t    prefix_size;
+	blk_t    *nb;
+	blk_t    *rem;
+	uintptr_t payload;
+	uintptr_t aligned;
 	uint32_t  rounded;
 
-	if (align <= TLSF_HDR || align == 0u)
-		return ulmk_heap_alloc(size);
-
-	/*
-	 * Allocate enough to guarantee an aligned payload: size + align bytes
-	 * of payload, so we can always find an aligned address inside.
-	 */
-	rounded = (uint32_t)(((size + align + TLSF_HDR - 1u) / TLSF_HDR) * TLSF_HDR);
-	blk = find_free_block(rounded);
-	if (!blk)
+	if (size == 0u)
 		return NULL;
+	if (align <= TLSF_HDR)
+		return ulmk_heap_alloc(size);
+	if (align & (align - 1u))
+		return NULL;
+
+	rounded = (uint32_t)(((size + TLSF_HDR - 1u) / TLSF_HDR) * TLSF_HDR);
+
+	key = ulmk_arch_spin_lock_irqsave(&g_ulmk_lock_mem);
+	/* Payloads are HDR-aligned, so the lead is at most align + HDR. */
+	blk = find_free_block(rounded + (uint32_t)align + TLSF_HDR);
+	if (!blk) {
+		ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_mem, key);
+		return NULL;
+	}
 	remove_free(blk);
 
-	raw           = (uint8_t *)blk + TLSF_HDR;
-	payload_start = (uintptr_t)raw;
-	aligned_payload = (payload_start + align - 1u) & ~(align - 1u);
+	payload = (uintptr_t)blk + TLSF_HDR;
+	aligned = (payload + align - 1u) & ~(uintptr_t)(align - 1u);
+	if (aligned != payload && aligned - payload < 2u * TLSF_HDR)
+		aligned += align;
 
-	if (aligned_payload == payload_start) {
-		/* Already aligned — use the block directly. */
-		return raw;
+	if (aligned != payload) {
+		nb            = (blk_t *)(aligned - TLSF_HDR);
+		nb->prev_phys = blk;
+		nb->size      = blk->size - (uint32_t)(aligned - payload);
+		nb->flags     = 0u;
+		nb->next_free = NULL;
+		nb->prev_free = NULL;
+		blk_next(nb)->prev_phys = nb;
+
+		blk->size = (uint32_t)(aligned - payload) - TLSF_HDR;
+		insert_free(blk);
+		blk = nb;
 	}
 
-	/* prefix_size = bytes from payload_start to aligned_payload */
-	prefix_size = aligned_payload - payload_start;
+	if (blk->size >= rounded + 2u * TLSF_HDR) {
+		rem            = (blk_t *)((uint8_t *)blk + TLSF_HDR + rounded);
+		rem->prev_phys = blk;
+		rem->size      = blk->size - rounded - TLSF_HDR;
+		rem->flags     = 0u;
+		rem->next_free = NULL;
+		rem->prev_free = NULL;
+		blk_next(rem)->prev_phys = rem;
+		blk->size = rounded;
+		insert_free(rem);
+	}
 
-	/*
-	 * There must be room for at least one free block header before the
-	 * aligned payload so we can split.  aligned_payload is always ≥
-	 * TLSF_HDR after the block header because align > TLSF_HDR, so this
-	 * invariant holds.
-	 */
-	prefix        = blk;
-	prefix->size  = (uint32_t)(prefix_size - TLSF_HDR);
-	insert_free(prefix);
-
-	/* Carve the aligned block from the remainder. */
-	blk           = (blk_t *)(aligned_payload - TLSF_HDR);
-	blk->prev_phys = prefix;
-	blk->size     = (uint32_t)(rounded - prefix_size);
-	blk->flags    = 0u;
-	blk->next_free = NULL;
-	blk->prev_free = NULL;
-
-	/* Update the block after blk (its prev_phys). */
-	blk_next(blk)->prev_phys = blk;
-
-	return (void *)aligned_payload;
+	ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_mem, key);
+	return (void *)aligned;
 }
 
 size_t ulmk_heap_free_bytes(void)

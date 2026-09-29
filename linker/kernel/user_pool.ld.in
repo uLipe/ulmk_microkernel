@@ -11,7 +11,16 @@
  */
 
     .user_pool (NOLOAD) : ALIGN(ULMK_MPU_ALIGN) {
+        /* End of user RAM on a subregion (1/8) of its covering region. */
+        . = ALIGN(ULMK_USER_RAM_ALIGN ?
+                  MAX(256, (1 << LOG2CEIL(ABSOLUTE(.) - _ulmk_user_ram_start)) / 8) :
+                  1);
         _ulmk_user_pool_start = .;
         . = ORIGIN(KERNEL_RAM) + LENGTH(KERNEL_RAM);
         _ulmk_user_pool_end = .;
     } > KERNEL_RAM
+
+    ASSERT(!ULMK_USER_RAM_ALIGN ||
+           (1 << LOG2CEIL(_ulmk_user_pool_start - _ulmk_user_ram_start)) <=
+           ULMK_USER_RAM_ALIGN,
+           "user RAM outgrew ULMK_USER_RAM_ALIGN: raise it in memory.ld")

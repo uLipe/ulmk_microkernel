@@ -148,6 +148,15 @@ void ulmk_arch_mpu_switch(const ulmk_arch_region_t *regions, uint8_t count,
 bool ulmk_arch_mpu_addr_permitted(uintptr_t addr, size_t size,
 				uint32_t perms);
 
+/*
+ * Lazy windows.  mpu_switch installs the static user map plus the pinned
+ * regions and drops every dynamic window; the rest is loaded one window at
+ * a time from a protection fault.  load returns false when @win cannot be
+ * encoded or is already live (the access is a real violation).
+ */
+bool ulmk_arch_mpu_load(const ulmk_arch_region_t *win);
+void ulmk_arch_mpu_flush(void);
+
 /* =========================================================================
  * IRQ and SRC control (arch_api_spec.md §8)
  * ========================================================================= */
@@ -272,6 +281,9 @@ void ulmk_arch_syscall_entry(uint32_t frame_ptr);
  */
 void ulmk_arch_trap_entry(uint8_t trap_class, uint8_t tin);
 
+/* Class 1 MPR/MPW lazy-window fault-in; true resumes via RFE (vectors.S). */
+bool ulmk_arch_trap_mem_fault(uint32_t tin);
+
 /*
  * ulmk_arch_trap_dump — dump arch-specific CPU state after a hardware fault.
  * Called by ulmk_arch_trap_entry(); output goes via ulmk_printk_char_out so it
@@ -302,6 +314,8 @@ void ulmk_printk_char_out(char c);
  * Called from the generic ISR stub before RSLCX/RFE.
  */
 void ulmk_kern_irq_dispatch(uint8_t srpn);
+/* User protection fault: true once a window is loaded and the access can retry. */
+bool ulmk_kern_mem_fault(uintptr_t addr, uint32_t access);
 void ulmk_kern_ipi_resched(void);
 void ulmk_kern_timer_tick(void);
 #if ULMK_CONFIG_ENABLE_SMP

@@ -113,11 +113,8 @@ void ulmk_kern_trap_mpu_restore(void)
 {
 	ulmk_thread_t *cur = ulmk_sched_current();
 
-	if (!cur)
-		return;
-
-	ulmk_arch_mpu_switch(cur->regions, cur->region_count,
-			     cur->privilege == ULMK_PRIV_KERNEL ? 0u : 1u);
+	if (cur)
+		ulmk_sched_mpu_switch(cur);
 }
 
 uint32_t ulmk_kern_trap_syscall(uint8_t tin, uint32_t args[4])

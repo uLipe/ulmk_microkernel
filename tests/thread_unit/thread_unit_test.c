@@ -96,6 +96,24 @@ void ulmk_arch_mpu_switch(const ulmk_arch_region_t *r, uint8_t n, uint8_t p)
 	(void)r; (void)n; (void)p;
 }
 
+/* ── Area stubs (kernel/mem/area.c has its own unit) ─────────────────────── */
+
+static ulmk_thread_t *g_released;
+
+void ulmk_area_set_init(struct ulmk_area_set *s)
+{
+	s->head  = NULL;
+	s->count = 0u;
+}
+
+void ulmk_mem_thread_release(ulmk_thread_t *th) { g_released = th; }
+
+int ulmk_mem_thread_inherit(ulmk_thread_t *c, const ulmk_thread_t *p)
+{
+	(void)c; (void)p;
+	return ULMK_OK;
+}
+
 /* ── Scheduler stubs ───────────────────────────────────────────────────────── */
 
 ulmk_thread_t *ulmk_sched_current(void) { return g_current; }
@@ -163,6 +181,7 @@ static void mock_reset(void)
 	g_schedule_count = 0;
 	g_ctx_init_count = 0;
 	g_recv_removed  = NULL;
+	g_released      = NULL;
 	/*
 	 * Do NOT reset s_tcb_idx: thread.c keeps a global registry linked list
 	 * (tcb_list) that still points to previously allocated TCBs.  Reusing
@@ -312,6 +331,19 @@ static void test_kill_valid(void)
 
 	EXPECT((int32_t)r == 0);
 	EXPECT(th->state == UL_THREAD_STATE_DEAD);
+	EXPECT(g_released == th);
+}
+
+static void test_init_stack_pinned(void)
+{
+	ulmk_thread_t *th = make_thread(3);
+
+	EXPECT(th != NULL);
+	EXPECT(th->stack_region.base == (uintptr_t)th->stack_base);
+	EXPECT(th->stack_region.size == th->stack_size);
+	EXPECT(th->stack_region.type == ULMK_REGION_STACK);
+	EXPECT(th->cap_flags == 0u);
+	EXPECT(th->areas.head == NULL);
 }
 
 static void test_kill_invalid_tid(void)
@@ -490,6 +522,7 @@ int main(void)
 	RUN(test_init_zero_stack_size);
 	RUN(test_spawn_null_attr);
 	RUN(test_kill_valid);
+	RUN(test_init_stack_pinned);
 	RUN(test_kill_invalid_tid);
 	RUN(test_kill_already_dead);
 	RUN(test_kill_blocked_ipc_recv);

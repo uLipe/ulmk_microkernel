@@ -4,10 +4,20 @@
  * Collects libgcc, compiler runtime, and any object not placed in
  * .kernel_text or .comp_*_text.  _ulmk_user_text_start is assigned
  * by generate_ld.py immediately before the first component snippet.
+ *
+ * ULMK_USER_TEXT_ALIGN (optional, chip memory.ld): same contract as
+ * ULMK_USER_RAM_ALIGN, for the user text range.
  */
 
     .user_runtime : ALIGN(32) {
         *(.text .text.* .rodata .rodata.*)
-        . = ALIGN(32);
+        . = ALIGN(ULMK_USER_TEXT_ALIGN ?
+                  MAX(256, (1 << LOG2CEIL(ABSOLUTE(.) - _ulmk_user_text_start)) / 8) :
+                  32);
         _ulmk_user_text_end = .;
     } > KERNEL_FLASH
+
+    ASSERT(!ULMK_USER_TEXT_ALIGN ||
+           (1 << LOG2CEIL(_ulmk_user_text_end - _ulmk_user_text_start)) <=
+           ULMK_USER_TEXT_ALIGN,
+           "user text outgrew ULMK_USER_TEXT_ALIGN: raise it in memory.ld")

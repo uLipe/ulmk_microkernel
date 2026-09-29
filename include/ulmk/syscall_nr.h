@@ -28,8 +28,7 @@
 #define ULMK_SYS_DCACHE_CLEAN         4  /* int ulmk_dcache_clean(addr, size)         */
 #define ULMK_SYS_DCACHE_INVALIDATE    5  /* int ulmk_dcache_invalidate(addr, size)    */
 #define ULMK_SYS_DCACHE_CLEAN_INV     6  /* int ulmk_dcache_clean_invalidate(...)     */
-#define ULMK_SYS_HEAP_EXTEND          7  /* int ulmk_heap_extend(size)                */
-#define ULMK_SYS_GET_THREAD_HEAP      8  /* int ulmk_get_thread_heap(info*)           */
+/* 7, 8: retired (per-thread slab heap) */
 #define ULMK_SYS_MEM_REVOKE           9  /* int   ulmk_mem_revoke(addr, tid)          */
 
 /* ── Scheduling / exit ───────────────────────────────────────────── */

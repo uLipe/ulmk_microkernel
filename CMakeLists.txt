@@ -115,6 +115,7 @@ add_library(ulmk_kernel STATIC
     kernel/sched/bitmap_rt.c
     kernel/ipc/ep.c
     kernel/notif/notif.c
+    kernel/mem/area.c
     kernel/mem/mem.c
     kernel/mem/tlsf.c
     kernel/irq/irq.c

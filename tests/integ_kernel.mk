@@ -35,6 +35,7 @@ INTEG_KERNEL_SRCS ?= \
 	$(ROOT)/kernel/sched/fifo_rt.c \
 	$(ROOT)/kernel/sched/bitmap_rt.c \
 	$(ROOT)/kernel/irq/irq.c \
+	$(ROOT)/kernel/mem/area.c \
 	$(ROOT)/kernel/mem/mem.c \
 	$(ROOT)/kernel/mem/tlsf.c \
 	$(ROOT)/kernel/thread/thread.c \

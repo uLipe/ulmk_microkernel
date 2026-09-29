@@ -350,6 +350,45 @@ static void arm_test_semihost_reissue(uint32_t r0, uint32_t r1)
 }
 #endif
 
+#define XPSR_T		(1u << 24)
+
+#define MMFSR_IACCVIOL	(1u << 0)
+#define MMFSR_DACCVIOL	(1u << 1)
+#define MMFSR_MUNSTKERR	(1u << 3)
+#define MMFSR_MSTKERR	(1u << 4)
+#define MMFSR_MLSPERR	(1u << 5)
+#define MMFSR_MMARVALID	(1u << 7)
+
+/*
+ * Lazy window fault-in for a MemManage from an unprivileged thread.  Stacking
+ * faults are never retried: the frame itself is unreliable, which is why the
+ * stack stays pinned.  MemManage does not say whether a data access was a
+ * load or a store, so it asks for READ: a store to a read-only area then
+ * faults again on the now-live window and is refused as a real violation.
+ */
+static bool user_mem_fault(const uint32_t *frame)
+{
+	uint32_t  mmfsr = REG32(ULMK_ARCH_SCB_CFSR) & 0xFFu;
+	uintptr_t addr;
+	uint32_t  access;
+
+	if (mmfsr & (MMFSR_MUNSTKERR | MMFSR_MSTKERR | MMFSR_MLSPERR))
+		return false;
+	if ((mmfsr & MMFSR_DACCVIOL) && (mmfsr & MMFSR_MMARVALID)) {
+		addr   = (uintptr_t)REG32(ULMK_ARCH_SCB_MMFAR);
+		access = ULMK_PERM_READ;
+	} else if (mmfsr & MMFSR_IACCVIOL) {
+		addr   = (uintptr_t)frame[6];
+		access = ULMK_PERM_EXEC;
+	} else {
+		return false;
+	}
+	if (!ulmk_kern_mem_fault(addr, access))
+		return false;
+	REG32(ULMK_ARCH_SCB_CFSR) = mmfsr;
+	return true;
+}
+
 /*
  * @exc         IPSR exception number (3=HardFault, 4=MemManage, 5=BusFault,
  *              6=UsageFault, 2=NMI).
@@ -379,6 +418,10 @@ void _arm_fault_dispatch(uint32_t exc, uint32_t *frame, uint32_t exc_return)
 	 * internals.  Handler-mode (kernel/ISR) faults are always fatal.
 	 */
 	if (frame && (exc_return & 0x4u) && (frame[7] & 0x1FFu) == 0u &&
+	    exc == 4u && user_mem_fault(frame))
+		return;
+
+	if (frame && (exc_return & 0x4u) && (frame[7] & 0x1FFu) == 0u &&
 	    (exc == 4u || exc == 5u || exc == 6u)) {
 		extern void ulmk_user_thread_entry(void (*)(void *), void *);
 
@@ -398,6 +441,12 @@ void _arm_fault_dispatch(uint32_t exc, uint32_t *frame, uint32_t exc_return)
 		 * function symbols have bit0 set — clear it before EXC_RETURN.
 		 */
 		frame[6] = (uint32_t)(uintptr_t)&ulmk_user_thread_entry & ~1u;
+		/*
+		 * A branch to an even address stacks EPSR.T=0 (and a fault in
+		 * an IT block stacks live ICI/IT bits): resuming with either
+		 * faults again forever.  Restart clean in Thumb state.
+		 */
+		frame[7] = XPSR_T;
 		return;
 	}
 

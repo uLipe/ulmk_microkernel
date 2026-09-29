@@ -53,9 +53,10 @@ static inline void sdk_msleep_yield(uint32_t ms)
 		ulmk_thread_yield();
 }
 
+/* @caps: ULMK_CAP_INHERIT (0) takes the creator's caps and areas. */
 static inline ulmk_tid_t sdk_spawn_priv(const char *name, void (*entry)(void *),
 					void *arg, uint8_t prio, size_t stack,
-					size_t heap, ulmk_privilege_t priv)
+					uint32_t caps, ulmk_privilege_t priv)
 {
 	ulmk_thread_attr_t a = {0};
 
@@ -65,16 +66,16 @@ static inline ulmk_tid_t sdk_spawn_priv(const char *name, void (*entry)(void *),
 	a.priority   = prio;
 	a.stack_size = stack;
 	a.privilege  = priv;
-	a.heap_size  = heap;
+	a.caps       = caps;
 	a.cpu        = 0u;
 	return ulmk_thread_create(&a);
 }
 
 static inline ulmk_tid_t sdk_spawn(const char *name, void (*entry)(void *),
 				   void *arg, uint8_t prio, size_t stack,
-				   size_t heap)
+				   uint32_t caps)
 {
-	return sdk_spawn_priv(name, entry, arg, prio, stack, heap,
+	return sdk_spawn_priv(name, entry, arg, prio, stack, caps,
 			      ULMK_PRIV_DRIVER);
 }
 

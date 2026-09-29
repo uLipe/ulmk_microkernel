@@ -79,6 +79,8 @@ static inline void ulmk_sched_kick_pending(void) { }
 void		 ulmk_sched_enqueue_locked(ulmk_thread_t *t);
 void		 ulmk_sched_dequeue_locked(ulmk_thread_t *t);
 ulmk_thread_t	*ulmk_sched_current(void);
+/* Load @th's static map and pinned stack; drops the previous dynamic windows. */
+void		 ulmk_sched_mpu_switch(const ulmk_thread_t *th);
 ulmk_thread_t	*ulmk_sched_peek_next(void);
 
 /*

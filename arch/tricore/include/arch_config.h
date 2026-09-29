@@ -81,14 +81,21 @@
 #endif
 #endif
 
-#if ULMK_ARCH_MPU_NUM_DPR <= 4
-#define ULMK_ARCH_MPU_USER_DPR_BASE	ULMK_ARCH_MPU_NUM_DPR
-#else
+/*
+ * Lazy areas need static slots 0..5 (ULMK_ARCH_MPU_*_DPR) plus at least one
+ * window.  A smaller MPU (QEMU exposes 4) falls back to one coarse user
+ * window over RAM and the pool: it runs, but threads are not isolated from
+ * each other's heap.
+ */
+#define ULMK_ARCH_MPU_LAZY		(ULMK_ARCH_MPU_NUM_DPR >= 7)
 #define ULMK_ARCH_MPU_USER_DPR_BASE	6
-#endif
 
 #define ULMK_ARCH_MAX_REGIONS	12
 #define ULMK_ARCH_REGION_ALIGN	64
+
+/* Lazy windows: DPR bounds are 8-byte granular, any size. */
+#define ULMK_ARCH_MPU_WIN_POW2	0
+#define ULMK_ARCH_MPU_WIN_MIN	8u
 
 /*
  * Optional board ISA revision (1.6.1 = TC2xx, 1.6.2 = TC3xx).  Defaults to
@@ -169,7 +176,15 @@
 #define ULMK_ARCH_MPU_KERNEL_DPR	0
 #define ULMK_ARCH_MPU_KRAM_DPR	1
 #define ULMK_ARCH_MPU_URAM_DPR	2
-#define ULMK_ARCH_MPU_MMIO_DPR	3
+#define ULMK_ARCH_MPU_FLASH_DPR	3
+#define ULMK_ARCH_MPU_MMIO_DPR	4
+#define ULMK_ARCH_MPU_PIN_DPR	5
+
+/*
+ * Segments C/D alias the executing core's own PSPR/DSPR (kernel RAM), so
+ * the user read window over global memory must stop short of them.
+ */
+#define ULMK_ARCH_LOCAL_ALIAS_BASE	0xC0000000u
 #define ULMK_ARCH_MPU_CPR_KERNEL	0
 #define ULMK_ARCH_MPU_CPR_USER	1
 #define ULMK_ARCH_PRS_USER	1u

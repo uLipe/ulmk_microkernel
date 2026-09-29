@@ -15,6 +15,7 @@
  */
 
     .extern ulmk_arch_trap_entry
+    .extern ulmk_arch_trap_mem_fault
     .extern ulmk_arch_syscall_entry
     .extern ulmk_kern_irq_dispatch
 
@@ -42,15 +43,8 @@ _trap_class0:
     .align  5
     .global _trap_class1
 _trap_class1:
-    mov     %d4, 1
-    mov     %d5, %d15
-    mfcr    %d15, 0xFE04
-    mov     %d14, 0x3000
-    andn    %d15, %d15, %d14
-    mtcr    0xFE04, %d15
-    isync
-    call    ulmk_arch_trap_entry
-    j       .
+    mov     %d8, %d15
+    j       _trap_class1_body
 
 /* Class 2 — Instruction Error Trap */
     .align  5
@@ -152,6 +146,36 @@ _trap_class7:
     andn    %d15, %d15, %d14
     mtcr    0xFE04, %d15
     isync
+    call    ulmk_arch_trap_entry
+    j       .
+
+/*
+ * Class 1 body (outside the 32-byte slot).  An MPR/MPW from a user thread
+ * may only mean a lazy area window is not loaded yet, so the lower context
+ * is saved and the faulting instruction resumed with RFE once it is.  TIN
+ * rides in D8: upper context, already saved by the trap and restored by RFE.
+ * PRS 0 comes before SVLCX (the CSA pool is kernel RAM) and interrupts stay
+ * off for the kernel part; RFE restores the thread's ICR.IE.
+ */
+_trap_class1_body:
+    disable
+    mfcr    %d15, 0xFE04
+    mov     %d14, 0x3C00
+    andn    %d15, %d15, %d14
+    mov     %d14, 0x800
+    or      %d15, %d14
+    mtcr    0xFE04, %d15
+    isync
+    svlcx
+    mov     %d4, %d8
+    call    ulmk_arch_trap_mem_fault
+    jz      %d2, 1f
+    rslcx
+    rfe
+1:
+    rslcx
+    mov     %d4, 1
+    mov     %d5, %d8
     call    ulmk_arch_trap_entry
     j       .
 

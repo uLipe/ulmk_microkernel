@@ -41,4 +41,11 @@ void   ulmk_heap_free(void *ptr);
 void  *ulmk_heap_aligned_alloc(size_t align, size_t size);
 size_t ulmk_heap_free_bytes(void);
 
+struct ulmk_thread;
+
+/* Area-set lifetime for a TCB; both take the area lock. */
+void ulmk_mem_thread_release(struct ulmk_thread *th);
+int  ulmk_mem_thread_inherit(struct ulmk_thread *child,
+			     const struct ulmk_thread *parent);
+
 #endif /* UL_MEM_INTERNAL_H */

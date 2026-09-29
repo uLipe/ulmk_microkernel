@@ -75,8 +75,8 @@ static int map_ok(const void *p)
 
 static ulmk_notif_t     g_done;
 static ulmk_ep_t        g_ipc_ep;
-static volatile int     g_heap_ok;
-static volatile int     g_heap_extend_ok;
+static volatile int     g_malloc_ok;
+static volatile int     g_free_ok;
 
 /* ------------------------------------------------------------------------- */
 /* Helper threads                                                            */
@@ -112,18 +112,40 @@ static void ipc_server(void *arg)
 	}
 }
 
-/*
- * Heap probe.  Created with a private heap so it can exercise the per-thread
- * heap syscalls (which return EPERM for heap-less threads such as root).
- */
+/* Heap probe: malloc/free are syscalls, inherited ULMK_CAP_HEAP allows them. */
 static void heap_probe(void *arg)
 {
-	ulmk_heap_info_t hi;
+	volatile uint32_t *p;
 
 	(void)arg;
-	g_heap_ok = (ulmk_get_thread_heap(&hi) == ULMK_OK && hi.size > 0u);
-	g_heap_extend_ok = (ulmk_heap_extend(256) == ULMK_OK);
+	p = (volatile uint32_t *)ulmk_malloc(256u);
+	if (p) {
+		p[0]  = 0x600dcafeu;
+		p[63] = 0x600dcafeu;
+		g_malloc_ok = (p[0] == 0x600dcafeu && p[63] == 0x600dcafeu);
+		g_free_ok = (ulmk_free((void *)p) == ULMK_OK &&
+			     ulmk_free((void *)p) != ULMK_OK);
+	}
 
+	ulmk_notif_signal(g_done, 0x1u);
+}
+
+/*
+ * Console text built on this thread's stack: the board server cannot see
+ * that stack, so every later line (PASS banner included) only appears if the
+ * bytes reached it by value.  Longer than one IPC message on purpose.
+ */
+static void console_probe(void *arg)
+{
+	char line[48];
+	uint32_t i;
+
+	(void)arg;
+	for (i = 0u; i < sizeof(line) - 2u; i++)
+		line[i] = (char)('a' + (i % 26u));
+	line[sizeof(line) - 2u] = '\n';
+	line[sizeof(line) - 1u] = '\0';
+	board_console_puts(line);
 	ulmk_notif_signal(g_done, 0x1u);
 }
 
@@ -136,7 +158,7 @@ static void idle_target(void *arg)
 }
 
 static ulmk_tid_t spawn(const char *name, void (*entry)(void *), void *arg,
-			uint8_t prio, size_t heap)
+			uint8_t prio)
 {
 	ulmk_thread_attr_t a = {0};
 
@@ -146,7 +168,6 @@ static ulmk_tid_t spawn(const char *name, void (*entry)(void *), void *arg,
 	a.priority   = prio;
 	a.stack_size = 1024;
 	a.privilege  = ULMK_PRIV_DRIVER;
-	a.heap_size  = heap;
 	return ulmk_thread_create(&a);
 }
 
@@ -163,7 +184,7 @@ static void test_thread_api(void)
 	CHECK("thread_self", self != ULMK_TID_INVALID);
 	CHECK("thread_yield", ulmk_thread_yield() == ULMK_OK);
 
-	g_target = spawn("target", idle_target, NULL, 200u, 0u);
+	g_target = spawn("target", idle_target, NULL, 200u);
 	CHECK("thread_create", g_target != ULMK_TID_INVALID);
 
 	CHECK("thread_priority_get(self)", ulmk_thread_priority_get(self) == 0);
@@ -188,7 +209,7 @@ static void test_ipc(void)
 	g_ipc_ep = ep;
 	CHECK("ep_create", ep != ULMK_EP_INVALID);
 
-	srv = spawn("ipc_srv", ipc_server, NULL, 1u, 0u);
+	srv = spawn("ipc_srv", ipc_server, NULL, 1u);
 	CHECK("ep_grant", ulmk_ep_grant(ep, srv) == ULMK_OK);
 
 	m.label = 0x100u;
@@ -266,12 +287,23 @@ static void test_heap(void)
 	uint32_t bits = 0u;
 
 	g_done = ulmk_notif_create();
-	spawn("heap", heap_probe, NULL, 1u, 512u);
+	spawn("heap", heap_probe, NULL, 1u);
 	ulmk_notif_wait(g_done, 0x1u, &bits);
 
-	CHECK("get_thread_heap", g_heap_ok);
-	CHECK("heap_extend", g_heap_extend_ok);
+	CHECK("malloc", g_malloc_ok);
+	CHECK("free", g_free_ok);
 
+	ulmk_notif_destroy(g_done);
+}
+
+static void test_console(void)
+{
+	uint32_t bits = 0u;
+
+	g_done = ulmk_notif_create();
+	spawn("cons", console_probe, NULL, 1u);
+	ulmk_notif_wait(g_done, 0x1u, &bits);
+	CHECK("console stack buffer", bits & 0x1u);
 	ulmk_notif_destroy(g_done);
 }
 
@@ -312,6 +344,7 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	test_notif();
 	test_memory();
 	test_heap();
+	test_console();
 	test_irq();
 	test_capabilities();
 

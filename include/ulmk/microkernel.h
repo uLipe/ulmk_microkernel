@@ -84,18 +84,14 @@ typedef struct {
 	uint8_t		 priority;	/* 0 = highest, 255 = lowest */
 	size_t		 stack_size;
 	ulmk_privilege_t	 privilege;
-	size_t		 heap_size;	/* 0 = no per-thread heap; last for compat */
+	/*
+	 * ULMK_CAP_INHERIT (0): the thread gets every capability and every
+	 * memory area of its creator.  Anything else: only the listed
+	 * capabilities the creator holds, and no areas (grant them later).
+	 */
+	uint32_t	 caps;
 	uint8_t		 cpu;		/* permanent affinity; 0 = CPU0 */
 } ulmk_thread_attr_t;
-
-/*
- * Per-thread heap descriptor — returned by ulmk_get_thread_heap().
- * Describes the heap area within the thread's slabAO allocation.
- */
-typedef struct {
-	uintptr_t base;	/* start of the heap region */
-	size_t    size;	/* size of the heap region in bytes */
-} ulmk_heap_info_t;
 
 /* =========================================================================
  * Boot information — passed to ulmk_root_thread()
@@ -133,7 +129,8 @@ typedef struct {
  * Capability flags — bitmask stored in ulmk_thread_t.cap_flags
  *
  * Checked by the syscall router before privileged operations.
- * Root thread starts with ULMK_CAP_ALL; grants subsets to children.
+ * Root thread starts with ULMK_CAP_ALL.  A thread never holds a capability
+ * its creator did not hold (see ulmk_thread_attr_t.caps).
  * ========================================================================= */
 
 #define ULMK_CAP_SPAWN		(1u << 0)  /* may create threads */
@@ -142,7 +139,11 @@ typedef struct {
 #define ULMK_CAP_MAP_PERIPH	(1u << 3)  /* may map peripheral MMIO regions */
 #define ULMK_CAP_GRANT_CAP	(1u << 4)  /* may grant capabilities to others */
 #define ULMK_CAP_MAP_SHARED	(1u << 5)  /* may map shared phys windows (SDRAM/FB) */
+#define ULMK_CAP_HEAP		(1u << 6)  /* may allocate from the kernel heap */
 #define ULMK_CAP_ALL		0xFFu	   /* all capabilities; root thread initial */
+
+#define ULMK_CAP_INHERIT	0u	   /* attr.caps: everything the creator has */
+#define ULMK_CAP_NONE		(1u << 31) /* attr.caps: explicitly nothing */
 
 /* =========================================================================
  * Memory map flags
@@ -290,10 +291,11 @@ static inline void ulmk_tick_start(void)
 
 /**
  * @brief Create a runnable thread.
- * @param attr Thread attributes: entry, arg, stack_size, priority, privilege
- *             and optional per-thread heap size.
+ * @param attr Thread attributes: entry, arg, stack_size, priority, privilege,
+ *             capabilities (see @c ulmk_thread_attr_t.caps) and affinity.
  * @return New TID, or @c ULMK_TID_INVALID on failure.
- * @pre Caller holds @c ULMK_CAP_SPAWN.
+ * @pre Caller holds @c ULMK_CAP_SPAWN; @p attr->privilege does not exceed
+ *      the caller's.
  */
 static inline ulmk_tid_t ulmk_thread_create(const ulmk_thread_attr_t *attr)
 {
@@ -621,54 +623,21 @@ static inline int ulmk_notif_destroy(ulmk_notif_t notif)
 /* =========================================================================
  * Memory API — docs/api_spec.md §9
  *
- * Per-thread heap model (slabAO):
- *   Each thread may carry a private heap allocated at creation time by
- *   setting attr.heap_size > 0.  The kernel allocates a contiguous slabAO
- *   (stack_size + heap_size bytes) from user_pool and covers it with a
- *   single MPU DPR.  The TCB lives in a separate allocation.
- *
- *   ulmk_get_thread_heap() — query heap base and size for the calling thread.
- *   ulmk_heap_extend()     — grow heap by allocating an additional slab from
- *                            the kernel pool; requires ULMK_PRIV_DRIVER.
+ * A mapping adds an area to the calling thread; nothing is programmed into
+ * the MPU/PMP until the thread first touches it.  Areas are private unless
+ * granted (ulmk_mem_grant) or inherited at thread creation.
  * ========================================================================= */
 
 /**
- * @brief Query the calling thread's private heap.
- * @param[out] info Filled with the heap base and size.
- * @return @c ULMK_OK, or @c ULMK_EPERM if the thread was created without a heap
- *         (@c attr.heap_size == 0).
- */
-static inline int ulmk_get_thread_heap(ulmk_heap_info_t *info)
-{
-	uint32_t r;
-	ULMK_SYSCALL_1(ULMK_SYS_GET_THREAD_HEAP, info, r);
-	return (int)r;
-}
-
-/**
- * @brief Grow the calling thread's heap.
- * @param size Additional bytes to allocate from the global user pool, covered
- *             by an extra MPU region.
- * @return @c ULMK_OK, @c ULMK_ENOMEM, @c ULMK_EPERM or @c ULMK_ENOSPC (MPU
- *         region limit reached).
- * @pre Caller runs at @c ULMK_PRIV_DRIVER.
- */
-static inline int ulmk_heap_extend(size_t size)
-{
-	uint32_t r;
-	ULMK_SYSCALL_1(ULMK_SYS_HEAP_EXTEND, size, r);
-	return (int)r;
-}
-
-/**
  * @brief Map a memory region.
- * @param hint  Advisory placement address (may be NULL).
+ * @param hint  Physical base for @c ULMK_MMAP_PERIPH / @c ULMK_MMAP_SHARED;
+ *              ignored for @c ULMK_MMAP_ANON.
  * @param size  Region size in bytes.
  * @param perms Permission mask of @c ULMK_PERM_* flags.
- * @param flags @c ULMK_MMAP_ANON (user pool), @c ULMK_MMAP_PERIPH (MMIO,
- *              requires @c ULMK_CAP_MAP_PERIPH), or @c ULMK_MMAP_SHARED
- *              (fixed physical window / SDRAM / FB; requires
- *              @c ULMK_CAP_MAP_SHARED).
+ * @param flags @c ULMK_MMAP_ANON (kernel heap, requires @c ULMK_CAP_HEAP),
+ *              @c ULMK_MMAP_PERIPH (MMIO, requires @c ULMK_CAP_MAP_PERIPH),
+ *              or @c ULMK_MMAP_SHARED (fixed physical window / SDRAM / FB;
+ *              requires @c ULMK_CAP_MAP_SHARED).
  * @return Base address of the mapping, or NULL on failure.
  */
 static inline void *ulmk_mem_map(void *hint, size_t size,
@@ -699,6 +668,25 @@ static inline int ulmk_mem_unmap(void *addr, size_t size)
 }
 
 /**
+ * @brief Allocate private read/write memory from the kernel heap.
+ * @return Block aligned to the MPU granule, or NULL.
+ * @pre Caller holds @c ULMK_CAP_HEAP.
+ */
+static inline void *ulmk_malloc(size_t size)
+{
+	return ulmk_mem_map(NULL, size, ULMK_PERM_READ | ULMK_PERM_WRITE,
+			    ULMK_MMAP_ANON);
+}
+
+/**
+ * @brief Free a block from ulmk_malloc(); revokes every grant made from it.
+ */
+static inline int ulmk_free(void *ptr)
+{
+	return ulmk_mem_unmap(ptr, 0u);
+}
+
+/**
  * @brief Share a memory region with another thread (no copy).
  * @param addr   Base address of the region.
  * @param size   Region size in bytes.
@@ -716,10 +704,13 @@ static inline int ulmk_mem_grant(void *addr, size_t size,
 
 /**
  * @brief Revoke a previously granted memory region from a peer thread.
+ *
+ * Cascades: whatever @p target passed on from that grant goes with it.
  * @param addr   Base address passed to ulmk_mem_grant().
  * @param target Thread whose access is being revoked.
- * @return @c ULMK_OK, @c ULMK_EPERM (caller does not own the region),
- *         @c ULMK_ESRCH (target gone), or @c ULMK_EINVAL.
+ * @return @c ULMK_OK, @c ULMK_EPERM (caller does not own the region, or the
+ *         target's area was not derived from it), @c ULMK_ESRCH (target
+ *         gone), or @c ULMK_EINVAL.
  */
 static inline int ulmk_mem_revoke(void *addr, ulmk_tid_t target)
 {

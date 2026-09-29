@@ -107,6 +107,15 @@ void ulmk_arch_mpu_switch(const ulmk_arch_region_t *regions, uint8_t count,
 bool ulmk_arch_mpu_addr_permitted(uintptr_t addr, size_t size, uint32_t perms);
 
 /*
+ * Lazy windows.  mpu_switch installs the static user map plus the pinned
+ * regions and drops every dynamic window; the rest is loaded one window at
+ * a time from a protection fault.  load returns false when @win cannot be
+ * encoded or is already live (the access is a real violation).
+ */
+bool ulmk_arch_mpu_load(const ulmk_arch_region_t *win);
+void ulmk_arch_mpu_flush(void);
+
+/*
  * Temporary NAPOT slots (high indices) for boot/config windows
  * (MSPI bring-up, ROM helpers). Map → use → unmap.
  */
@@ -173,6 +182,8 @@ void ulmk_kern_trap_recoverable(void);
 void ulmk_kern_trap_panic(void);
 bool ulmk_irq_in_attach(void);
 void ulmk_kern_trap_mpu_restore(void);
+/* User protection fault: true once a window is loaded and the access can retry. */
+bool ulmk_kern_mem_fault(uintptr_t addr, uint32_t access);
 void ulmk_kern_main(const ulmk_boot_info_t *info);
 
 #endif /* ULMK_ARCH_H */

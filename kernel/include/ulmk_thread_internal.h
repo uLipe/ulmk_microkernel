@@ -16,6 +16,7 @@
 #include <ulmk_arch.h>
 #include <kernel/include/list.h>
 #include <kernel/include/ulmk_timer.h>
+#include <kernel/include/ulmk_area_internal.h>
 
 struct ulmk_syscall_wcet_slot;
 
@@ -38,14 +39,10 @@ typedef struct ulmk_thread {
 	uint8_t         *stack_base;
 	size_t           stack_size;
 	/*
-	 * slabAO — contiguous allocation (stack + heap) from user_pool.
-	 * NULL for static threads (idle, root).  TCB is always a separate
-	 * allocation so userspace DPR cannot reach kernel metadata.
+	 * Heap block holding the stack; NULL for static threads (idle, root),
+	 * whose TCB and stack live in linker-reserved sections.
 	 */
-	void            *slab_base;	/* base of slabAO allocation */
-	size_t           slab_size;	/* stack_size + heap_size */
-	uintptr_t        heap_base;	/* slab_base + stack_size */
-	size_t           heap_size;	/* bytes reserved for thread heap */
+	void            *stack_alloc;
 	uint8_t          priority;
 	uint8_t          cpu;             /* permanent affinity (0..NR_CPUS-1) */
 	uint8_t          saved_prio;      /* priority before inheritance boost */
@@ -99,9 +96,13 @@ typedef struct ulmk_thread {
 	 */
 	int32_t           syscall_wake_ret;
 	uint8_t           syscall_wake_ret_valid;
-	/* MPU regions owned by this thread (configured by mpu_switch on dispatch) */
-	ulmk_arch_region_t  regions[ULMK_ARCH_MAX_REGIONS];
-	uint8_t           region_count;
+	/*
+	 * The stack is pinned: programmed on every switch because hardware
+	 * exception stacking on some ports cannot take a fault.  Everything
+	 * else the thread may touch is an area, loaded by the fault handler.
+	 */
+	ulmk_arch_region_t  stack_region;
+	struct ulmk_area_set areas;
 	/*
 	 * Capability bitmask — which privileged operations this thread may invoke.
 	 */
