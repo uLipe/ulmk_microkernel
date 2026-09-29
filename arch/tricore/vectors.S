@@ -176,16 +176,15 @@ _trap_class7:
     .global _ulmk_int_table
 _ulmk_int_table:
 
-/* SRPN=0 — priority 0 is disabled; this slot is never dispatched. */
-    rfe
-    .align  5		/* pad to next 32-byte boundary */
-
 /*
- * SRPN=1..255 — generic userspace IRQ dispatcher with preemption support.
- * Board services bind hardware IRQs (e.g. STM0) to notifications via
- * ulmk_irq_bind_hw(); the kernel dispatches by SRPN read from ICR.CCPN.
+ * Every slot, 0 included, is the same generic dispatcher: the kernel reads
+ * the SRPN from ICR.CCPN, not from the slot.  The entry address is
+ * BIV | (PIPN << 5) -- an OR, not an add -- and BIV is only 256-byte
+ * aligned, so with BIV bits 8..12 set a PIPN lands on another slot of this
+ * table (on 0x..300, SRPN 8/16/24 land on slot 0).  Identical slots make
+ * that harmless without aligning the table to its 8 KB size.
  */
-    .rept   255
+    .rept   256
     j       _arch_generic_preempt_isr
     .align  5
     .endr
