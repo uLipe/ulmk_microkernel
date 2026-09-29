@@ -101,23 +101,13 @@ typedef struct {
     uint8_t        priority;    /* 0 = highest, 255 = lowest */
     size_t         stack_size;  /* bytes; allocated from user_pool */
     ulmk_privilege_t privilege;   /* ULMK_PRIV_USER or ULMK_PRIV_DRIVER */
-    size_t         heap_size;   /* 0 = no per-thread heap; last for compat */
+    uint32_t       caps;        /* ULMK_CAP_INHERIT (0), ULMK_CAP_NONE, or a mask */
+    uint8_t        cpu;         /* permanent affinity; 0 = CPU0 */
 } ulmk_thread_attr_t;
 ```
 
-Always declare `ulmk_thread_attr_t attr = {0}` before setting individual fields so
-that `heap_size` defaults safely to zero.
-
-### Thread heap descriptor
-
-```c
-typedef struct {
-    uintptr_t base;  /* start of the heap region within the slabAO */
-    size_t    size;  /* bytes; equals attr.heap_size at creation */
-} ulmk_heap_info_t;
-```
-
-Returned by `ulmk_get_thread_heap()`.
+Always declare `ulmk_thread_attr_t attr = {0}` before setting individual fields:
+`caps == 0` is `ULMK_CAP_INHERIT`, the safe default (see §5).
 
 ### Boot information
 
@@ -194,6 +184,17 @@ threads run at `ULMK_PRIV_DRIVER`.  Untrusted application threads use
 Capabilities are a bitmask in the TCB.  Checked by the syscall router before
 privileged operations.
 
+The root thread starts with `ULMK_CAP_ALL` and no areas: like every user
+thread it reaches user text and user `.data`/`.bss` statically, and maps
+heap, MMIO or shared windows through `ulmk_mem_map()` (see §9).  Every other
+thread derives from its creator, and never holds more than the creator:
+
+| `attr.caps` | Capabilities | Memory areas |
+|-------------|--------------|--------------|
+| `ULMK_CAP_INHERIT` (0) | all of the creator's | all of the creator's |
+| mask | mask ∩ creator's | none — grant them with `ulmk_mem_grant()` |
+| `ULMK_CAP_NONE` | none | none |
+
 | Constant | Bit | Operation gated |
 |----------|-----|----------------|
 | `ULMK_CAP_SPAWN` | 0 | `ulmk_thread_create()` |
@@ -202,6 +203,7 @@ privileged operations.
 | `ULMK_CAP_MAP_PERIPH` | 3 | `ulmk_mem_map()` with `ULMK_MMAP_PERIPH` |
 | `ULMK_CAP_GRANT_CAP` | 4 | `ulmk_cap_grant()` |
 | `ULMK_CAP_MAP_SHARED` | 5 | `ulmk_mem_map()` with `ULMK_MMAP_SHARED` |
+| `ULMK_CAP_HEAP` | 6 | `ulmk_mem_map()` with `ULMK_MMAP_ANON`, `ulmk_malloc()` |
 | `ULMK_CAP_ALL` | 0xFF | All capabilities; initial value of the root thread |
 
 ---
@@ -477,36 +479,35 @@ Frees the notification object.  Threads blocked on it are woken with
 
 ## 9. Memory API
 
-### SlabAO per-thread heap model
+### Areas and lazy MPU programming
 
-Each thread may carry a private heap allocated at creation time by setting
-`attr.heap_size > 0`.  The kernel allocates a contiguous *slabAO*
-(`stack_size + heap_size` bytes) from `user_pool` and covers it with a single
-MPU DPR.  The TCB lives in a separate allocation so userspace cannot reach
-kernel metadata through its DPR.
+Each thread owns a sorted set of *areas* — `[base, base + size)` with
+`ULMK_PERM_*` bits — kept in kernel memory.  `ulmk_mem_map()`,
+`ulmk_malloc()` and `ulmk_mem_grant()` only record an area; none of them
+touches the MPU/PMP.
 
-### `ulmk_get_thread_heap`
+The MPU holds a few static windows (user text, user `.data`/`.bss`, MMIO) plus
+the running thread's stack.  Any other access faults; the kernel looks the
+address up in the current thread's areas and, if one grants the access, loads a
+window for it and resumes the thread.  Otherwise the thread is killed with the
+usual fault policy.  Kernel mode bypasses the MPU entirely.
 
-```c
-int ulmk_get_thread_heap(ulmk_heap_info_t *info);
-```
+A grant derives the target's area from the granter's.  Revoking, unmapping or
+freeing an area removes everything derived from it, in any thread.  A thread
+that exits or is killed drops its own areas only: what it granted stays valid
+until revoked or freed by the owner.
 
-Populates `*info` with the heap base and size for the calling thread.
-Returns `ULMK_OK` on success, `ULMK_EPERM` if the thread has no heap
-(`attr.heap_size == 0`).
-
----
-
-### `ulmk_heap_extend`
+### `ulmk_malloc` / `ulmk_free`
 
 ```c
-int ulmk_heap_extend(size_t size);
+void *ulmk_malloc(size_t size);
+int   ulmk_free(void *ptr);
 ```
 
-Allocates `size` bytes from the global `user_pool` and adds the new region as
-an additional MPU DPR for the calling thread.  Requires `ULMK_PRIV_DRIVER`.
-Returns `ULMK_OK`, `ULMK_ENOMEM`, `ULMK_EPERM`, or `ULMK_ENOSPC` (DPR limit
-reached).
+`ulmk_malloc()` is `ulmk_mem_map(NULL, size, READ | WRITE, ULMK_MMAP_ANON)`:
+one syscall, one area, aligned to the MPU granule.  Requires `ULMK_CAP_HEAP`;
+returns NULL on failure (including `size == 0`).  `ulmk_free()` unmaps the
+block and revokes every grant made from it.
 
 ---
 
@@ -520,7 +521,7 @@ Maps a memory region.  Flags:
 
 | Flag | Meaning |
 |------|---------|
-| `ULMK_MMAP_ANON` | Anonymous mapping from `user_pool` |
+| `ULMK_MMAP_ANON` | Private block from the kernel heap (requires `ULMK_CAP_HEAP`) |
 | `ULMK_MMAP_PERIPH` | Map a peripheral MMIO region (requires `ULMK_CAP_MAP_PERIPH`) |
 | `ULMK_MMAP_SHARED` | Map a fixed physical window (SDRAM, framebuffer, …); requires `ULMK_CAP_MAP_SHARED`. Arch MPU uses `ULMK_REGION_SHARED` (ARMv7-M: Normal WB non-shareable for FMC/LTDC — clean D-cache before LTDC/DMA; not `ULMK_MMAP_PERIPH`) |
 
@@ -733,12 +734,12 @@ renumbering.  Router upper bound: `ULMK_SYS_MAX = 128`.
 
 | Nr | Symbol | Privilege / cap | API |
 |----|--------|-----------------|-----|
-| 1 | `ULMK_SYS_MMAP` | any; `CAP_MAP_PERIPH` if `MMAP_PERIPH` | `ulmk_mem_map` |
-| 2 | `ULMK_SYS_MUNMAP` | any | `ulmk_mem_unmap` |
-| 3 | `ULMK_SYS_MEM_GRANT` | any | `ulmk_mem_grant` |
-| 4–6 | *(reserved)* | — | former malloc/free/aligned_alloc |
-| 7 | `ULMK_SYS_HEAP_EXTEND` | any | `ulmk_heap_extend` |
-| 8 | `ULMK_SYS_GET_THREAD_HEAP` | any | `ulmk_get_thread_heap` |
+| 1 | `ULMK_SYS_MMAP` | `CAP_HEAP` / `CAP_MAP_PERIPH` / `CAP_MAP_SHARED` per flag | `ulmk_mem_map`, `ulmk_malloc` |
+| 2 | `ULMK_SYS_MUNMAP` | owner | `ulmk_mem_unmap`, `ulmk_free` |
+| 3 | `ULMK_SYS_MEM_GRANT` | owner | `ulmk_mem_grant` |
+| 4–6 | `ULMK_SYS_DCACHE_*` | DRIVER | `ulmk_dcache_clean` / `_invalidate` / `_clean_invalidate` |
+| 7–8 | *(retired)* | — | former per-thread slab heap |
+| 9 | `ULMK_SYS_MEM_REVOKE` | owner | `ulmk_mem_revoke` |
 | 10 | `ULMK_SYS_YIELD` | any | `ulmk_thread_yield` |
 | 11 | `ULMK_SYS_EXIT` | any | `ulmk_thread_exit` |
 | 12 | `ULMK_SYS_SLEEP` | any | `ulmk_sleep_ms` |
