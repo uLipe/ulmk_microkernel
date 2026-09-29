@@ -14,7 +14,7 @@
 
 #define CONSOLE_MSG_PUTC		1u
 #define CONSOLE_MSG_WRITE		2u
-#define CONSOLE_WRITE_MAX		256u
+#define CONSOLE_CHUNK_MAX		((ULMK_MSG_WORDS - 1u) * 4u)
 
 #define UART_LSR			5u
 #define UART_LSR_TX_IDLE		(1u << 5)
@@ -64,14 +64,13 @@ static void board_server(void *arg)
 		if (msg.label == CONSOLE_MSG_PUTC) {
 			console_putc_hw((char)(uint8_t)msg.words[0]);
 		} else if (msg.label == CONSOLE_MSG_WRITE) {
-			const char *buf =
-				(const char *)(uintptr_t)msg.words[0];
-			uint32_t len = msg.words[1];
+			const char *buf = (const char *)&msg.words[1];
+			uint32_t len = msg.words[0];
 			uint32_t i;
 
 			if (buf && len > 0u) {
-				if (len > CONSOLE_WRITE_MAX)
-					len = CONSOLE_WRITE_MAX;
+				if (len > CONSOLE_CHUNK_MAX)
+					len = CONSOLE_CHUNK_MAX;
 				for (i = 0u; i < len; i++)
 					console_putc_hw(buf[i]);
 			}
