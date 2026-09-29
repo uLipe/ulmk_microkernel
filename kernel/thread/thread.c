@@ -12,6 +12,7 @@
 #include <ulmk/config.h>
 #include <kernel/include/ulmk_thread_internal.h>
 #include <kernel/include/ulmk_sched.h>
+#include <kernel/include/ulmk_xcall.h>
 #include <kernel/include/ulmk_percpu.h>
 #include <kernel/include/ulmk_mem_internal.h>
 #include <kernel/include/ulmk_ep_internal.h>
@@ -358,7 +359,7 @@ uint32_t ulmk_kern_thread_spawn(uint32_t attr_ptr)
 #endif
 }
 
-uint32_t ulmk_kern_thread_kill(uint32_t tid)
+static uint32_t thread_kill_local(uint32_t tid)
 {
 	ulmk_thread_t *th = ulmk_thread_by_tid((ulmk_tid_t)tid);
 	ulmk_thread_t *peer;
@@ -419,6 +420,29 @@ uint32_t ulmk_kern_thread_kill(uint32_t tid)
 	}
 
 	return 0;
+}
+
+#if ULMK_CONFIG_ENABLE_SMP
+static uint32_t thread_kill_xcall(void *arg)
+{
+	return thread_kill_local((uint32_t)(uintptr_t)arg);
+}
+#endif
+
+/*
+ * A thread only ever runs on its own CPU, so it is killed there: from here
+ * it could be mid-instruction on that CPU while its TCB and areas go away.
+ */
+uint32_t ulmk_kern_thread_kill(uint32_t tid)
+{
+#if ULMK_CONFIG_ENABLE_SMP
+	ulmk_thread_t *th = ulmk_thread_by_tid((ulmk_tid_t)tid);
+
+	if (th && th->cpu != (uint8_t)ulmk_arch_cpu_id())
+		return ulmk_xcall(th->cpu, thread_kill_xcall,
+				  (void *)(uintptr_t)tid);
+#endif
+	return thread_kill_local(tid);
 }
 
 uint32_t ulmk_kern_thread_suspend(uint32_t tid)

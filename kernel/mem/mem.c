@@ -21,6 +21,8 @@
 #include <kernel/include/ulmk_mem_internal.h>
 #include <kernel/include/ulmk_klock.h>
 #include <kernel/include/ulmk_sched.h>
+#include <kernel/include/ulmk_percpu.h>
+#include <kernel/include/ulmk_xcall.h>
 #include <ulmk_arch.h>
 
 #define MEM_PERMS	(ULMK_PERM_READ | ULMK_PERM_WRITE | ULMK_PERM_EXEC)
@@ -32,12 +34,72 @@ static ulmk_thread_t *set_owner(struct ulmk_area_set *s)
 
 /*
  * Windows are only ever live on the CPU running their thread, and a switch
- * drops them, so leaving the set is enough unless that thread is current.
+ * drops them, so leaving the set is enough unless that thread is running.
+ * Another CPU running it is flushed by mem_settle() once the lock is gone.
  */
 void ulmk_kern_area_dropped(struct ulmk_area_set *s)
 {
-	if (set_owner(s) == ulmk_sched_current())
+	ulmk_thread_t *th = set_owner(s);
+
+	if (th == ulmk_sched_current()) {
 		ulmk_arch_mpu_flush();
+		return;
+	}
+#if ULMK_CONFIG_ENABLE_SMP
+	if (th->cpu != (uint8_t)ulmk_arch_cpu_id() &&
+	    ulmk_percpu_of(th->cpu)->current == th)
+		ulmk_percpu()->mpu_shootdown |= 1u << th->cpu;
+#endif
+}
+
+void ulmk_kern_area_retire(struct ulmk_area *a)
+{
+	struct ulmk_percpu *pc = ulmk_percpu();
+
+	a->next = pc->area_retired;
+	pc->area_retired = a;
+}
+
+#if ULMK_CONFIG_ENABLE_SMP
+static uint32_t mpu_flush_xcall(void *arg)
+{
+	(void)arg;
+	ulmk_arch_mpu_flush();
+	return 0u;
+}
+#endif
+
+/*
+ * Finish a drop: flush the CPUs still running a thread that lost an area,
+ * then free the blocks retired meanwhile.  Called with no lock held.  The
+ * list is detached first so a nested settle (from a request served while
+ * waiting) cannot free a block this one has not shot down yet.
+ */
+static void mem_settle(void)
+{
+	struct ulmk_percpu *pc = ulmk_percpu();
+	struct ulmk_area *a;
+	struct ulmk_area *n;
+#if ULMK_CONFIG_ENABLE_SMP
+	uint32_t mask;
+	uint32_t cpu;
+#endif
+
+	a = pc->area_retired;
+	pc->area_retired = NULL;
+#if ULMK_CONFIG_ENABLE_SMP
+	mask = pc->mpu_shootdown;
+	pc->mpu_shootdown = 0u;
+	for (cpu = 0u; mask; cpu++, mask >>= 1) {
+		if (mask & 1u)
+			(void)ulmk_xcall(cpu, mpu_flush_xcall, NULL);
+	}
+#endif
+	for (; a; a = n) {
+		n = a->next;
+		ulmk_heap_free((void *)a->base);
+		ulmk_heap_free(a);
+	}
 }
 
 bool ulmk_kern_mem_fault(uintptr_t addr, uint32_t access)
@@ -130,6 +192,7 @@ uint32_t ulmk_kern_mem_unmap(uint32_t addr, uint32_t size)
 	if (a)
 		ulmk_area_revoke(a);
 	ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_area, key);
+	mem_settle();
 
 	return a ? (uint32_t)ULMK_OK : (uint32_t)(int32_t)ULMK_EINVAL;
 }
@@ -206,6 +269,7 @@ uint32_t ulmk_kern_mem_revoke(uint32_t addr, uint32_t target_tid)
 			rc = ULMK_EPERM;
 	}
 	ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_area, key);
+	mem_settle();
 
 	return (uint32_t)(int32_t)rc;
 }
@@ -217,6 +281,7 @@ void ulmk_mem_thread_release(ulmk_thread_t *th)
 	key = ulmk_arch_spin_lock_irqsave(&g_ulmk_lock_area);
 	ulmk_area_set_release(&th->areas);
 	ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_area, key);
+	mem_settle();
 }
 
 int ulmk_mem_thread_inherit(ulmk_thread_t *child, const ulmk_thread_t *parent)

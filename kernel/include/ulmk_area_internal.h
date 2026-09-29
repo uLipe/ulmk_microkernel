@@ -70,4 +70,11 @@ int ulmk_area_window(const struct ulmk_area *a, uintptr_t addr,
  */
 void ulmk_kern_area_dropped(struct ulmk_area_set *s);
 
+/*
+ * Called with the area lock held for a backing record that is out of every
+ * set and has nothing derived from it.  The kernel frees the block and @a
+ * once no CPU can still reach the block through a live window.
+ */
+void ulmk_kern_area_retire(struct ulmk_area *a);
+
 #endif /* UL_AREA_INTERNAL_H */

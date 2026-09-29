@@ -44,6 +44,15 @@ void ulmk_kern_area_dropped(struct ulmk_area_set *s)
 	g_ndropped++;
 }
 
+static unsigned g_nretired;
+
+void ulmk_kern_area_retire(struct ulmk_area *a)
+{
+	g_nretired++;
+	ulmk_heap_free((void *)a->base);
+	ulmk_heap_free(a);
+}
+
 static bool dropped(const struct ulmk_area_set *s)
 {
 	unsigned i;
@@ -258,11 +267,13 @@ static void test_revoke_cascade(void)
 	CHECK(a->child == b && b->parent == a, "tree linked");
 
 	g_ndropped = 0u;
+	g_nretired = 0u;
 	ulmk_area_revoke(a);
 	CHECK(s1.count == 0u && s2.count == 0u && s3.count == 0u,
 	      "origin and every descendant gone");
 	CHECK(dropped(&s1) && dropped(&s2) && dropped(&s3),
 	      "every holder told to drop its windows");
+	CHECK(g_nretired == 1u, "backing handed to the kernel, not freed inline");
 	CHECK(ulmk_heap_free_bytes() == free0, "backing and records freed");
 }
 

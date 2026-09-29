@@ -158,8 +158,9 @@ static void release_up(struct ulmk_area *a)
 		p = a->parent;
 		parent_unlink(a);
 		if (a->flags & ULMK_AREA_BACKED)
-			ulmk_heap_free((void *)a->base);
-		ulmk_heap_free(a);
+			ulmk_kern_area_retire(a);
+		else
+			ulmk_heap_free(a);
 		if (!p || p->set || p->child)
 			break;
 		a = p;
