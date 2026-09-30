@@ -13,6 +13,7 @@ if(ULMK_ARCH STREQUAL "tricore")
 elseif(ULMK_ARCH STREQUAL "riscv")
 	set(ULMK_ARCH_KERNEL_SOURCES
 		${ULMK_ARCH_DIR}/arch.c
+		${ULMK_ARCH_DIR}/mpu_pmp.c
 		${ULMK_ARCH_DIR}/smp.c
 		${ULMK_ARCH_DIR}/irq.c
 		${ULMK_ARCH_DIR}/irq_clint.c
