@@ -902,8 +902,141 @@ def _run_all_shell(kind: str, tests: list[str], arch: str,
     return " ; ".join(lines)
 
 
+SILICON_TIMEOUT = 90
+SILICON_SMP_ONLY = frozenset({"silicon_smp_smoke"})
+# icount's cycle counter is one virtual clock shared by every hart: the
+# instructions another hart runs while a syscall is in flight land in its
+# sample, so per-hart WCET is only meaningful on single-hart QEMU.
+SILICON_UP_ONLY = {
+    "silicon_wcet": "QEMU cycle counter is shared across harts",
+}
+# Without icount QEMU's cycle counter follows host time, so a WCET envelope
+# would measure host scheduling noise; icount makes it count instructions.
+SILICON_QEMU_EXTRA = {
+    "silicon_wcet": "-icount shift=0",
+}
+# Cases that need board hardware a QEMU machine does not model.
+SILICON_QEMU_SKIP = {
+    "silicon_device_manager": "no device-manager adapters (board_devices)",
+}
+
+
+def _silicon_cases(board_host: Path) -> list[str]:
+    return [c["name"] for c in _discover_components(board_host)
+            if Path(c["path"]).parent.name == "silicon"]
+
+
+def _silicon_case_shell(name: str, board_container: str, board: dict,
+                        board_host: Path, build_subdir: str,
+                        enable_smp: bool, enable_mmu: bool,
+                        timeout: int) -> str:
+    """Build one silicon case alone and judge it by its console sentinels."""
+    flags = _component_cmake_flags({name}, board_host)
+    if name == "silicon_wcet":
+        flags.append("-DULMK_CONFIG_SYSCALL_WCET=1")
+    build = _build_shell(board_container, board, True, False, flags,
+                         build_subdir, False, enable_smp, enable_mmu)
+    tag = name.upper()
+    log = f"/build/{build_subdir}.{name}.log"
+    qemu = _qemu_cmdline(board, f"/build/{build_subdir}/ulmk", enable_smp)
+    if name in SILICON_QEMU_EXTRA:
+        qemu += f" {SILICON_QEMU_EXTRA[name]}"
+    return (
+        # set -e is inert inside the caller's `if`; a clean build leaves an
+        # ELF only when configure, compile and link all succeeded.
+        f"( {build} ) > /build/{build_subdir}.{name}.build.log 2>&1 ; "
+        f"test -f /build/{build_subdir}/ulmk && "
+        f"python3 /workspace/tests/sdk_suite/qemu_until_sentinels.py "
+        f"--timeout {timeout} --log {log} "
+        f"--sentinel '{tag}: PASS' --fail-sentinel '{tag}: FAIL' -- {qemu} && "
+        f"grep -q '{tag}: PASS' {log} && ! grep -q '{tag}: FAIL' {log}"
+    )
+
+
+def _run_silicon(args: argparse.Namespace) -> None:
+    board_host, board_container, extra_mounts = _resolve_board_path(args.board)
+    board = _parse_board_cmake(board_host)
+    arch = _board_arch(board)
+    enable_smp = bool(getattr(args, "enable_smp", False))
+    enable_mmu = bool(getattr(args, "enable_mmu", False))
+
+    if not board.get("UL_BOARD_QEMU_MACHINE"):
+        sys.exit(f"error: tests silicon: {board_host.name} has no QEMU machine")
+    if enable_mmu and board.get("ULMK_BOARD_HAVE_SV32") != "1":
+        sys.exit(f"error: --enable-mmu: {board_host.name} has no MMU backend "
+                 "(ULMK_BOARD_HAVE_SV32 not set in board.cmake)")
+
+    cases = _silicon_cases(board_host)
+    if not cases:
+        sys.exit("error: no silicon_* components (is ../ulmk_apps present?)")
+    if args.list:
+        print(f"silicon cases ({len(cases)}):")
+        for name in cases:
+            print(f"  {name}")
+        return
+    if args.test:
+        if args.test not in cases:
+            sys.exit(f"error: unknown silicon case '{args.test}'.\n"
+                     f"Available: {', '.join(cases)}")
+        cases = [args.test]
+
+    mode = ("smp" if enable_smp else "up") + ("_mmu" if enable_mmu else "")
+    build_subdir = f"{_build_subdir(arch, board_host.name)}-silicon-{mode}"
+    lines = [CONTAINER_PATH, "FAILED=''", "SKIPPED=''"]
+    for name in cases:
+        why = SILICON_QEMU_SKIP.get(name)
+        if not why and name in SILICON_SMP_ONLY and not enable_smp:
+            why = "needs --enable-smp"
+        if not why and enable_smp:
+            why = SILICON_UP_ONLY.get(name)
+        if why:
+            lines.append(f"echo '--- {name}: SKIP ({why}) ---'; "
+                         f"SKIPPED=\"$SKIPPED {name}\"")
+            continue
+        snippet = _silicon_case_shell(name, board_container, board,
+                                      board_host, build_subdir, enable_smp,
+                                      enable_mmu, args.timeout)
+        rec_ok = _json_record("silicon", name, arch, board_host.name, "PASS")
+        rec_bad = _json_record("silicon", name, arch, board_host.name, "FAIL")
+        lines.append(
+            f"echo '=== {name} [{board_host.name} {mode}] ==='; "
+            f"if ( {snippet} ); then echo '--- {name}: PASS ---'; {rec_ok}; "
+            f"else echo '--- {name}: FAIL ---'; "
+            f"tail -n 40 /build/{build_subdir}.{name}.build.log "
+            f"/build/{build_subdir}.{name}.log 2>/dev/null; "
+            f"FAILED=\"$FAILED {name}\"; {rec_bad}; fi"
+        )
+    lines.append(
+        "[ -n \"$SKIPPED\" ] && echo \"skipped:$SKIPPED\"; "
+        "if [ -z \"$FAILED\" ]; then "
+        "echo; echo '=== ALL TESTS PASSED ==='; "
+        "else echo; echo \"=== FAILED:$FAILED ===\"; exit 1; fi"
+    )
+
+    BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    cmd = _base_docker_cmd(interactive=False) + [
+        "--volume", f"{BUILD_DIR}:/build",
+    ] + extra_mounts + _apps_mount()
+    json_dir = getattr(args, "json_dir", None)
+    if json_dir:
+        Path(json_dir).resolve().mkdir(parents=True, exist_ok=True)
+        cmd += ["--volume", f"{Path(json_dir).resolve()}:/test-results",
+                "-e", "ULMK_TEST_JSON_DIR=/test-results"]
+    cmd += [IMAGE_NAME, "/bin/bash", "-c", " ; ".join(lines)]
+    print(f"Running {len(cases)} silicon case(s) on QEMU "
+          f"[{board_host.name} {mode}]")
+    os.execvp("docker", cmd)
+
+
 def _run_tests(args: argparse.Namespace) -> None:
     kind      = args.kind
+    if kind == "silicon":
+        _killall()
+        _run_silicon(args)
+        return
+    if getattr(args, "enable_smp", False):
+        sys.exit("error: --enable-smp is only valid with 'tests silicon' "
+                 "(e2e uses --include-smp)")
     test_name = args.test
     include_smp = bool(getattr(args, "include_smp", False))
     include_smp4 = bool(getattr(args, "include_smp4", False))
@@ -1066,6 +1199,8 @@ examples:
   python3 tools/dev.py tests e2e --board boards/qemu_riscv_virt
   python3 tools/dev.py tests e2e --board boards/qemu_riscv_virt --include-smp
   python3 tools/dev.py tests e2e --test sdk_suite/abi_smoke
+  python3 tools/dev.py tests silicon --board boards/qemu_riscv_virt --enable-smp
+  python3 tools/dev.py tests silicon --board boards/qemu_riscv_virt --enable-mmu
   python3 tools/dev.py tests e2e --list
   python3 tools/dev.py tests integ --test sdk_suite/arch_whitebox/ctx_early_tricore
   python3 tools/dev.py killall
@@ -1212,6 +1347,9 @@ examples:
             "  tests e2e               SDK consumer end-to-end tests (UP)\n"
             "  tests e2e --include-smp RISC-V: UP suite + smp_* cases\n"
             "  tests e2e --include-smp4 RISC-V 4-hart: smp_* + smp4_* only\n"
+            "  tests silicon           ulmk_apps silicon_* cases on QEMU,\n"
+            "                          one ELF per case [--enable-smp]\n"
+            "                          [--enable-mmu] [--case NAME]\n"
             "  tests <kind> --list     show available suites\n"
             "  tests <kind> --test NAME run one suite\n"
             "  tests <kind> --board PATH  select architecture via board"
@@ -1219,7 +1357,7 @@ examples:
     )
     tests_p.add_argument(
         "kind",
-        choices=["unit", "integ", "e2e"],
+        choices=["unit", "integ", "e2e", "silicon"],
         help="Test suite type",
     )
     tests_p.add_argument(
@@ -1229,10 +1367,11 @@ examples:
         help="Board for integ/e2e tests (default: boards/qemu_tc3xx)",
     )
     tests_p.add_argument(
-        "--test",
+        "--test", "--case",
+        dest="test",
         metavar="NAME",
         default=None,
-        help="Run a single test by directory name",
+        help="Run a single test by directory name (silicon: component name)",
     )
     tests_p.add_argument(
         "--list",
@@ -1255,8 +1394,19 @@ examples:
     tests_p.add_argument(
         "--enable-mmu",
         action="store_true",
-        help="e2e only (RISC-V Sv32 boards): build the SDK with "
+        help="e2e / silicon (RISC-V Sv32 boards): build with "
              "ULMK_CONFIG_MMU=1",
+    )
+    tests_p.add_argument(
+        "--enable-smp",
+        action="store_true",
+        help="silicon only: build each case with ULMK_CONFIG_ENABLE_SMP=1",
+    )
+    tests_p.add_argument(
+        "--timeout",
+        type=int,
+        default=SILICON_TIMEOUT,
+        help=f"silicon only: seconds per case (default {SILICON_TIMEOUT})",
     )
     tests_p.add_argument(
         "--json-dir",

@@ -314,6 +314,116 @@ jobs:
           path: ci-results/e2e-riscv-smp4/
           if-no-files-found: warn
 
+  # ── RISC-V Sv32: SDK suite with page-table protection instead of PMP ──────
+  integ-tests-riscv-sv32:
+    name: SDK suite (RISC-V Sv32 ${{ matrix.mode }})
+    needs: docker-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mode: up
+            flags: ""
+          - mode: smp
+            flags: "--include-smp"
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull image
+        run: |
+          IMG="${{ needs.docker-image.outputs.image }}:sha-${{ github.sha }}"
+          docker pull "$IMG"
+          docker tag  "$IMG" ulipe-microkernel:dev
+
+      - name: Run SDK suite (Sv32 ${{ matrix.mode }})
+        run: |
+          python3 tools/dev.py tests e2e \
+            --board boards/qemu_riscv_virt \
+            --enable-mmu ${{ matrix.flags }} \
+            --json-dir ci-results/e2e-riscv-sv32-${{ matrix.mode }}
+
+      - name: Upload RISC-V Sv32 results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-riscv-sv32-${{ matrix.mode }}
+          path: ci-results/e2e-riscv-sv32-${{ matrix.mode }}/
+          if-no-files-found: warn
+
+  # ── RISC-V: ulmk_apps silicon cert suite on QEMU (PMP / Sv32 × UP / SMP) ──
+  silicon-qemu-riscv:
+    name: Silicon suite on QEMU (RISC-V ${{ matrix.prot }} ${{ matrix.mode }})
+    needs: docker-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        prot: [pmp, sv32]
+        mode: [up, smp]
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out ulmk_apps next to the kernel
+        run: |
+          BR="${{ github.head_ref || github.ref_name }}"
+          git clone --depth 1 --branch "$BR" \
+            https://github.com/uLipe/ulmk_apps.git ../ulmk_apps ||
+          git clone --depth 1 https://github.com/uLipe/ulmk_apps.git ../ulmk_apps
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull image
+        run: |
+          IMG="${{ needs.docker-image.outputs.image }}:sha-${{ github.sha }}"
+          docker pull "$IMG"
+          docker tag  "$IMG" ulipe-microkernel:dev
+
+      - name: Run silicon suite
+        run: |
+          FLAGS=""
+          [ "${{ matrix.prot }}" = sv32 ] && FLAGS="$FLAGS --enable-mmu"
+          [ "${{ matrix.mode }}" = smp ] && FLAGS="$FLAGS --enable-smp"
+          python3 tools/dev.py tests silicon --board boards/qemu_riscv_virt \
+            $FLAGS --json-dir ci-results/silicon-${{ matrix.prot }}-${{ matrix.mode }}
+
+      - name: Run silicon_smp_smoke on 4 harts
+        if: matrix.mode == 'smp'
+        run: |
+          FLAGS="--enable-smp"
+          [ "${{ matrix.prot }}" = sv32 ] && FLAGS="$FLAGS --enable-mmu"
+          python3 tools/dev.py tests silicon --board boards/qemu_riscv_virt_smp4 \
+            $FLAGS --case silicon_smp_smoke \
+            --json-dir ci-results/silicon-${{ matrix.prot }}-${{ matrix.mode }}
+
+      - name: Upload silicon results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-silicon-${{ matrix.prot }}-${{ matrix.mode }}
+          path: ci-results/silicon-${{ matrix.prot }}-${{ matrix.mode }}/
+          if-no-files-found: warn
+
   # ── ARM Cortex-M: build (mps2-an500 M7 + mps2-an505 M33) ──────────────────
   build-arm:
     name: Build kernel (ARM ${{ matrix.board }})
@@ -396,6 +506,8 @@ jobs:
       - integ-tests-riscv
       - integ-tests-riscv-smp
       - integ-tests-riscv-smp4
+      - integ-tests-riscv-sv32
+      - silicon-qemu-riscv
       - integ-tests-arm
     if: always()
     runs-on: ubuntu-latest
