@@ -319,6 +319,31 @@ Fast domain switch at context switch time.  Must be as cheap as possible; on
 architectures that support it (e.g., TriCore `PSW.PRS` field), this is a
 single register write.
 
+### `ulmk_arch_mpu_load` / `ulmk_arch_mpu_flush` — lazy windows
+
+```c
+bool ulmk_arch_mpu_load(const ulmk_arch_region_t *win);
+void ulmk_arch_mpu_flush(void);
+```
+
+`ulmk_arch_mpu_switch()` installs only the static user map and the thread's
+pinned regions.  Every other area is loaded one window at a time, on this
+CPU, when `ulmk_kern_mem_fault()` resolves a fault.  `load` returns false
+when the window cannot be encoded or is already live, i.e. the access is a
+real violation.  `flush` drops every dynamic window on this CPU; the kernel
+calls it (locally, or on the remote CPU through an xcall) when areas are
+unmapped or revoked.
+
+The kernel cuts windows out of an area with `ulmk_area_window()`, following
+constants from `arch_config.h`:
+
+| Macro | Meaning |
+|---|---|
+| `ULMK_ARCH_REGION_ALIGN` | Base/size granule for ANON maps and stacks; the heap carves them with `ulmk_heap_aligned_alloc()` on this boundary |
+| `ULMK_ARCH_MPU_WIN_POW2` | 1: windows are naturally aligned powers of two (NAPOT PMP, ARMv7-M) |
+| `ULMK_ARCH_MPU_WIN_MIN` | Smallest window / alignment granule |
+| `ULMK_ARCH_MPU_WIN_MAX` | Optional.  Largest window per load; a larger area is loaded as the `WIN_MAX` stretch around the fault address (one 4 KiB page for Sv32) |
+
 ### `ulmk_arch_mpu_addr_permitted`
 
 ```c
@@ -620,6 +645,21 @@ void ulmk_kern_trap_recoverable(void);
 Kill the current thread after an isolatable hardware fault (e.g., MPU violation
 in a user thread).  The arch calls this when the fault can be attributed to a
 single thread and the kernel can continue running.
+
+### `ulmk_kern_mem_fault`
+
+```c
+bool ulmk_kern_mem_fault(uintptr_t addr, uint32_t access);
+```
+
+Called by the arch for a U-mode protection fault — an MPU/PMP access fault
+or, with `ULMK_CONFIG_MMU=1`, a page fault — before treating it as a
+violation.  `access` is `ULMK_PERM_READ`, `ULMK_PERM_WRITE` or
+`ULMK_PERM_EXEC`.  Returns true when one of the thread's areas covers `addr`
+with that permission and its window was loaded through
+`ulmk_arch_mpu_load()`: the arch returns to the faulting instruction, which
+retries.  False means a real violation and the arch goes on to
+`ulmk_kern_trap_recoverable()`.
 
 ### `ulmk_kern_trap_panic`
 
