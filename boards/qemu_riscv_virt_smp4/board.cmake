@@ -26,6 +26,9 @@ set(UL_BOARD_QEMU_MACHINE "virt")
 set(UL_BOARD_QEMU_CPU "rv32")
 set(UL_BOARD_QEMU_EXTRA "-bios" "none" "-m" "16M" "-smp" "4")
 
+# Same harts as qemu_riscv_virt: -DULMK_CONFIG_MMU=1 selects Sv32.
+set(ULMK_BOARD_HAVE_SV32 1)
+
 # Demos call ulmk_board_sim_exit() to end the run (board_sim_exit.c).
 set(ULMK_CONFIG_SIM_EXIT 1 CACHE STRING
 	"Board can stop the simulator; demos end instead of idling")

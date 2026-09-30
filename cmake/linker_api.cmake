@@ -93,6 +93,7 @@ function(_ulmk_finalize_build kernel_target chip_dir)
                 "--kernel-dir" "${CMAKE_SOURCE_DIR}/linker/kernel"
                 "--snippets"   "${CMAKE_SOURCE_DIR}/linker/snippets"
                 "--output"     "${generated_ld}"
+                "--page-align" "${ULMK_ARCH_PAGE_ALIGN}"
                 ${app_args}
                 ${comp_args}
                 ${domain_args}

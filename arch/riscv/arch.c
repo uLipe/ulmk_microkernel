@@ -35,6 +35,9 @@
 #define MCAUSE_LOAD_FAULT	5u
 #define MCAUSE_STORE_FAULT	7u
 #define MCAUSE_INST_FAULT	1u
+#define MCAUSE_INST_PAGE_FAULT	12u
+#define MCAUSE_LOAD_PAGE_FAULT	13u
+#define MCAUSE_STORE_PAGE_FAULT	15u
 #define MCAUSE_ILLEGAL_INST	2u
 
 struct riscv_trap_frame {
@@ -223,12 +226,33 @@ static uint8_t mcause_to_trap_class(uint32_t mcause)
 	case MCAUSE_INST_FAULT:
 	case MCAUSE_LOAD_FAULT:
 	case MCAUSE_STORE_FAULT:
+	case MCAUSE_INST_PAGE_FAULT:
+	case MCAUSE_LOAD_PAGE_FAULT:
+	case MCAUSE_STORE_PAGE_FAULT:
 		return 0u;
 	case MCAUSE_ECALL_U:
 	case MCAUSE_ECALL_M:
 		return 6u;
 	default:
 		return 4u;
+	}
+}
+
+/* Access a protection fault was refused, or 0 for any other cause. */
+static uint32_t mcause_to_access(uint32_t code)
+{
+	switch (code) {
+	case MCAUSE_LOAD_FAULT:
+	case MCAUSE_LOAD_PAGE_FAULT:
+		return ULMK_PERM_READ;
+	case MCAUSE_STORE_FAULT:
+	case MCAUSE_STORE_PAGE_FAULT:
+		return ULMK_PERM_WRITE;
+	case MCAUSE_INST_FAULT:
+	case MCAUSE_INST_PAGE_FAULT:
+		return ULMK_PERM_EXEC;
+	default:
+		return 0u;
 	}
 }
 
@@ -281,19 +305,14 @@ void _ulmk_trap_dispatch(struct riscv_trap_frame *frame)
 	 * faults are recoverable (kill thread).  M-mode faults panic.
 	 */
 	mstatus = frame->regs[TF_MSTATUS / 4u];
-	if (((mstatus >> MSTATUS_MPP_SHIFT) & 3u) == 0u &&
-	    (code == MCAUSE_LOAD_FAULT || code == MCAUSE_STORE_FAULT ||
-	     code == MCAUSE_INST_FAULT)) {
-		access = (code == MCAUSE_LOAD_FAULT)  ? ULMK_PERM_READ :
-			 (code == MCAUSE_STORE_FAULT) ? ULMK_PERM_WRITE :
-							ULMK_PERM_EXEC;
+	access = mcause_to_access(code);
+	if (((mstatus >> MSTATUS_MPP_SHIFT) & 3u) == 0u && access) {
 		__asm__ volatile("csrr %0, mtval" : "=r"(mtval));
 		if (ulmk_kern_mem_fault((uintptr_t)mtval, access))
 			return;
 	}
 	if (((mstatus >> MSTATUS_MPP_SHIFT) & 3u) == 0u &&
-	    (code == MCAUSE_LOAD_FAULT || code == MCAUSE_STORE_FAULT ||
-	     code == MCAUSE_INST_FAULT || code == MCAUSE_ILLEGAL_INST))
+	    (access || code == MCAUSE_ILLEGAL_INST))
 		ulmk_arch_trap_entry(0u, (uint8_t)code);
 	else
 		ulmk_arch_trap_entry(mcause_to_trap_class(mcause), (uint8_t)code);

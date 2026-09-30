@@ -2,7 +2,8 @@
 /*
  * RISC-V PMP memory protection — arch/riscv/mpu_pmp.c
  *
- * ulmk_arch_mpu_* backend, split out of arch.c.
+ * ulmk_arch_mpu_* backend for ULMK_CONFIG_MMU=0; mmu_sv32.c is the page-table
+ * alternative.  Selected by cmake/arch_sources.cmake.
  */
 
 #include <stdint.h>

@@ -25,6 +25,12 @@ set(ULMK_BOARD_SOURCES
 set(UL_BOARD_QEMU_MACHINE "virt")
 set(UL_BOARD_QEMU_CPU "rv32")
 set(UL_BOARD_QEMU_EXTRA "-bios" "none" "-m" "16M")
+# Appended by dev.py when the ELF was built with ULMK_CONFIG_ENABLE_SMP=1.
+set(UL_BOARD_QEMU_SMP_EXTRA "-smp" "2")
+
+# The virt harts implement S-mode, so satp and Sv32 are available:
+# -DULMK_CONFIG_MMU=1 (dev.py --enable-mmu) protects with page tables.
+set(ULMK_BOARD_HAVE_SV32 1)
 
 # Demos call ulmk_board_sim_exit() to end the run (board_sim_exit.c).
 set(ULMK_CONFIG_SIM_EXIT 1 CACHE STRING

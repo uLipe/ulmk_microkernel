@@ -11,8 +11,6 @@ project(ulmk
 # Re-sync arch from ULMK_CHIP_DIR (FORCE overwrites stale cache entries).
 include(cmake/board_resolve.cmake)
 
-include(cmake/arch_sources.cmake)
-
 # Distribution SDK mode: emit the kernel/arch and the board as two static
 # libraries (+ processed linker script) for integration into external
 # toolchains, instead of a self-contained demo ELF.  Driven by
@@ -24,6 +22,7 @@ option(ULMK_SDK "Emit distributable static libraries instead of a demo ELF" OFF)
 # ---------------------------------------------------------------------------
 
 include(cmake/config.cmake)
+include(cmake/arch_sources.cmake)
 include(cmake/optimize.cmake)
 
 # ---------------------------------------------------------------------------
@@ -87,6 +86,7 @@ execute_process(
         --set "ULMK_CONFIG_BOARD_PMP_EXTRA=${ULMK_CONFIG_BOARD_PMP_EXTRA}"
         --set "ULMK_CONFIG_SIM_EXIT=${ULMK_CONFIG_SIM_EXIT}"
         --set "ULMK_CONFIG_FPU=${ULMK_CONFIG_FPU}"
+        --set "ULMK_CONFIG_MMU=${ULMK_CONFIG_MMU}"
     RESULT_VARIABLE _ulmk_gen_rc)
 if(NOT _ulmk_gen_rc EQUAL 0)
     message(FATAL_ERROR "gen_config.py failed (rc=${_ulmk_gen_rc})")

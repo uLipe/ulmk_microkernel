@@ -31,9 +31,29 @@ set(ULMK_CONFIG_SIM_EXIT         0  CACHE STRING
 set(ULMK_CONFIG_FPU              1  CACHE STRING
 	"Use the hardware FPU: hard-float ABI + FP context switch (0 = soft)")
 
+set(ULMK_CONFIG_MMU              0  CACHE STRING
+	"Protect user memory with the MMU (page tables) instead of the MPU (0=MPU, 1=MMU)")
+
 if("${ULMK_CONFIG_ENABLE_SMP}" STREQUAL "1")
 	if("${ULMK_ARCH}" STREQUAL "arm")
 		message(FATAL_ERROR
 			"ULMK_CONFIG_ENABLE_SMP=1 is not supported on ARM Cortex-M")
+	endif()
+endif()
+
+if("${ULMK_CONFIG_MMU}" STREQUAL "1")
+	if(NOT "${ULMK_ARCH}" STREQUAL "riscv")
+		message(FATAL_ERROR
+			"ULMK_CONFIG_MMU=1 is only implemented on RISC-V (Sv32)")
+	endif()
+	if(NOT "${ULMK_BOARD_HAVE_SV32}" STREQUAL "1")
+		message(FATAL_ERROR
+			"ULMK_CONFIG_MMU=1: board ${ULMK_CHIP_DIR} does not declare "
+			"ULMK_BOARD_HAVE_SV32 in its board.cmake")
+	endif()
+	if("${ULMK_CONFIG_BOARD_PMP_EXTRA}" STREQUAL "1")
+		message(FATAL_ERROR
+			"ULMK_CONFIG_MMU=1 cannot be combined with "
+			"ULMK_CONFIG_BOARD_PMP_EXTRA=1 (board PMP entries need the MPU)")
 	endif()
 endif()

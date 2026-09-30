@@ -80,6 +80,14 @@ TAG_SUFFIX := $(TAG_SUFFIX)_irqattach
 else
 SDK_IRQ_ATTACH_FLAG :=
 endif
+# Page tables instead of the MPU (separate SDK cache + kernel).
+MMU ?= 0
+ifeq ($(MMU),1)
+SDK_MMU_FLAG := --enable-mmu
+TAG_SUFFIX := $(TAG_SUFFIX)_mmu
+else
+SDK_MMU_FLAG :=
+endif
 TAG        := $(ARCH)_$(BOARD_NAME)_gcc$(TAG_SUFFIX)
 TOOLCHAIN  := $(WS)/cmake/toolchain-$(ARCH)-gcc.cmake
 
@@ -134,7 +142,7 @@ sdk:
 			--board-name $(BOARD_NAME) \
 			--build-dir $(BUILD) \
 			--out-dir $(SDK) \
-			$(SDK_SMP_FLAG) $(SDK_IRQ_ATTACH_FLAG); \
+			$(SDK_SMP_FLAG) $(SDK_IRQ_ATTACH_FLAG) $(SDK_MMU_FLAG); \
 	fi
 
 all: sdk $(TARGET)

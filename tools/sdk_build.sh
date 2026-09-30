@@ -27,7 +27,8 @@ set -euo pipefail
 usage() {
 	echo "usage: $0 --toolchain FILE --chip-dir DIR --arch ARCH \\" >&2
 	echo "          --board-name NAME --build-dir DIR --out-dir DIR \\" >&2
-	echo "          [--clean] [--optimize-size] [--enable-smp] [--enable-irq-attach]" >&2
+	echo "          [--clean] [--optimize-size] [--enable-smp] [--enable-irq-attach] \\" >&2
+	echo "          [--enable-mmu]" >&2
 	exit 2
 }
 
@@ -41,6 +42,7 @@ CLEAN=0
 OPTIMIZE_SIZE=0
 ENABLE_SMP=0
 ENABLE_IRQ_ATTACH=0
+ENABLE_MMU=0
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -54,6 +56,7 @@ while [ $# -gt 0 ]; do
 	--optimize-size) OPTIMIZE_SIZE=1; shift;;
 	--enable-smp) ENABLE_SMP=1;   shift;;
 	--enable-irq-attach) ENABLE_IRQ_ATTACH=1; shift;;
+	--enable-mmu) ENABLE_MMU=1;   shift;;
 	*) echo "error: unknown argument '$1'" >&2; usage;;
 	esac
 done
@@ -72,6 +75,9 @@ if [ "$ENABLE_SMP" -eq 1 ]; then
 fi
 if [ "$ENABLE_IRQ_ATTACH" -eq 1 ]; then
 	TAG="${TAG}_irqattach"
+fi
+if [ "$ENABLE_MMU" -eq 1 ]; then
+	TAG="${TAG}_mmu"
 fi
 # The lib prefix is what makes -lulmk_kernel_<tag> resolve; without it a
 # consumer has to fall back to -l:<file> or an absolute path, which vendor
@@ -98,6 +104,7 @@ IRQ_ATTACH_FLAG=""
 if [ "$ENABLE_IRQ_ATTACH" -eq 1 ]; then
 	IRQ_ATTACH_FLAG="-DULMK_CONFIG_IRQ_ATTACH=1"
 fi
+MMU_FLAG="-DULMK_CONFIG_MMU=${ENABLE_MMU}"
 # Library components (ENABLED OFF by default) that consumers expect in the
 # SDK tree.  Pass extra -DULMK_COMP_<name>_ENABLED=ON here to package more.
 COMP_ENABLE_FLAGS="-DULMK_COMP_ulmk_device_manager_ENABLED=ON"
@@ -109,6 +116,7 @@ cmake -S "$WORKSPACE" -B "$BUILD_DIR" \
 	${OPT_SIZE_FLAG} \
 	${SMP_FLAG} \
 	${IRQ_ATTACH_FLAG} \
+	${MMU_FLAG} \
 	${COMP_ENABLE_FLAGS} \
 	-GNinja \
 	--no-warn-unused-cli
