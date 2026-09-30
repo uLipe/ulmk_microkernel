@@ -55,6 +55,14 @@ directory, not in components.  The board provides three mandatory symbols:
 | `ulmk_printk_char_out(char)` | kernel printk | single-character debug output |
 | `board_services_init(const ulmk_boot_info_t *)` | `ulmk_root_thread()` | spawn background service threads |
 
+Only the first two, plus the tick/IPI and optional IRQ-routing hooks of
+`<ulmk/board.h>`, run privileged.  Everything `board_services_init()` starts —
+console, timer, drivers, device adapters — is an ordinary userspace thread that
+reaches its peripheral through a kernel-granted MMIO window and an IRQ
+notification:
+
+![Board code split: ulmk_board_init and the kernel hooks run privileged, the rest of the BSP runs as userspace threads](diagrams/board_bsp_split.png)
+
 ---
 
 ## 2. Repository Layout for an Application

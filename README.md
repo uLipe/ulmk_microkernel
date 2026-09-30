@@ -12,19 +12,7 @@ priority inheritance.
 
 ## Architecture overview
 
-```
-┌─────────────────────────────────────────────────┐
-│  ulmk_root_thread()                               │
-│  board_services (console, clocks, …)            │  userspace
-│  components (hello_world, drivers, apps, …)     │  (ULMK_PRIV_DRIVER / USER)
-├─────────────────────────────────────────────────┤
-│  kernel/  — scheduler, IPC, memory, IRQ table   │  supervisor
-│  arch/    — context switch, MPU, tick, atomics  │
-├─────────────────────────────────────────────────┤
-│  board/   — ulmk_board_init, ulmk_printk_char_out   │  hardware
-│  chip     — MEMORY block (external, ULMK_CHIP_DIR)│
-└─────────────────────────────────────────────────┘
-```
+![ulmk architecture: userspace, syscall gateway, kernel, hardware](docs/diagrams/architecture.png)
 
 Key properties:
 
@@ -48,36 +36,13 @@ gateway**; the kernel validates the request, enforces MPU boundaries, and
 returns.  Driver logic, service topology, and startup order all live in
 userspace (`ulmk_root_thread`, board services, components).
 
-```mermaid
-flowchart TB
-    subgraph userspace["Userspace — policy"]
-        direction LR
-        A["App thread<br/>(ULMK_PRIV_USER)"]
-        D["Driver / server<br/>(ULMK_PRIV_DRIVER)"]
-        S["Another service"]
-    end
+![Microkernel philosophy: protection domains in userspace talk through kernel IPC endpoints and notifications](docs/diagrams/microkernel_philosophy.png)
 
-    subgraph kernel["ulmk microkernel — mechanism"]
-        direction TB
-        GW["Syscall gateway<br/>(trap / SVC / ecall)"]
-        IPC["IPC endpoints &amp; notifications"]
-        SCH["Scheduler"]
-        MPU["MPU / PMP isolation"]
-    end
-
-    A -->|"ulmk_ep_send / reply"| GW
-    D -->|"ulmk_thread_* / ulmk_mem_*"| GW
-    S -->|"ulmk_notif_* / ulmk_irq_*"| GW
-    GW --> IPC
-    GW --> SCH
-    GW --> MPU
-    A <-->|"sync IPC"| D
-    D <-->|"sync IPC"| S
-```
-
-The diagram is schematic: all cross-boundary traffic funnels through the kernel.
-Applications hold only the capabilities they were granted; the MPU keeps each
-thread inside its own data domain even though everything links into one ELF.
+The request/reply between the application and the UART driver is only the
+logical view: the message travels through endpoint E1 in the kernel, and the
+UART interrupt reaches the driver as a bit on notification N1.  Applications
+hold only the capabilities they were granted; the MPU keeps each thread inside
+its own areas even though everything links into one ELF.
 
 ---
 

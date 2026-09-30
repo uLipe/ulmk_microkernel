@@ -41,27 +41,7 @@
 The linker infrastructure has **three independent layers**. Each layer owns its
 concerns and only passes a defined contract to the next:
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  LAYER 1 — Kernel-common (linker/kernel/)                        │
-│  Fully arch-independent section definitions.                     │
-│  References abstract region names: KERNEL_FLASH, KERNEL_RAM …   │
-│  Never contains addresses, arch instructions or chip specifics.  │
-├──────────────────────────────────────────────────────────────────┤
-│  LAYER 2 — Arch port (arch/<ARCH>/linker/)                       │
-│  Arch-specific but NOT chip-specific fragments.                  │
-│  Examples: OUTPUT_FORMAT/ARCH/ENTRY, CSA pool, small-data ABI.  │
-│  These features exist on every chip of the same arch family.     │
-├──────────────────────────────────────────────────────────────────┤
-│  LAYER 3 — Chip input (external, passed to generate_ld.py)       │
-│  Chip-specific MEMORY block + optional chip sections (e.g. BMHD)│
-│  Lives OUTSIDE the kernel repo. Provided by board/chip package.  │
-│  Examples: TC27x memory map, TC29x memory map, QEMU memory map.  │
-└──────────────────────────────────────────────────────────────────┘
-              │
-              ▼ assembled by cmake/generate_ld.py at configure time
-        build/generated.ld   (final linker script)
-```
+![Linker layers: kernel-common, arch port, chip input and CMake snippets assembled by generate_ld.py into the final linker script](diagrams/linker_layers.png)
 
 **Principles:**
 
@@ -73,8 +53,8 @@ concerns and only passes a defined contract to the next:
 - Arch-specific features that are uniform across all chips of the same arch
   (e.g. CSA pool, TriCore small-data ABI anchors) live in the arch layer.
 - App code sections and memory domain sections are **not hardcoded** anywhere.
-  They are generated as snippets from CMake declarations and concatenated at
-  configure time.
+  They are generated as snippets from CMake declarations and concatenated by
+  `generate_ld.py` before link.
 - All symbols exported to C code use the `_ulmk_` prefix.
 - MPU alignment is parameterised via `ULMK_MPU_ALIGN`, defined in the chip input.
 

@@ -33,23 +33,7 @@
 The build system follows the same layering principle as the linker and arch specs:
 **each layer owns its concerns, nothing bleeds across boundaries**.
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│  ulmk/          Kernel repo — kernel source, arch port,  │
-│                             linker fragments, CMake API, boards/,    │
-│                             built-in components, and stub files.     │
-├──────────────────────────────────────────────────────────────────────┤
-│  ../ulmk_apps/              Optional sibling — external components   │
-│                             and board-specific root threads.         │
-├──────────────────────────────────────────────────────────────────────┤
-│  <any path>/my_board/       Board chip input (external, optional) —  │
-│                             memory.ld + bmhd.ld.in for real hw.      │
-│                             Pointed to by ULMK_CHIP_DIR.               │
-├──────────────────────────────────────────────────────────────────────┤
-│  build/                     Generated artefacts — generated.ld,      │
-│                             object files, final ELF. Never committed.│
-└──────────────────────────────────────────────────────────────────────┘
-```
+![Build system layers: kernel repo, board directory and ulmk_apps feed CMake, which emits one ELF or the SDK into build/](diagrams/build_system_layers.png)
 
 **Principles:**
 
@@ -59,8 +43,9 @@ The build system follows the same layering principle as the linker and arch spec
   with a commented-out stub as documentation — see §9.
 - No component name, domain name, or source path is hardcoded in the kernel.  All
   of that comes from component `CMakeLists.txt` files.
-- The linker script is **generated at configure time** from fragments, after all
-  components have registered themselves.
+- The linker script is **generated from fragments right before link**; its
+  inputs are fixed at configure time, after all components have registered
+  themselves.
 - Chip-specific inputs (memory map, boot header) are parameterised via `ULMK_CHIP_DIR`.
 
 ---
