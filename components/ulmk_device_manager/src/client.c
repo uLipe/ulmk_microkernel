@@ -47,8 +47,8 @@ static void pack_inline(ulmk_msg_t *msg, const void *buf, size_t len)
 	uint32_t i;
 	uint32_t w;
 
-	/* words[0] = len | (INLINE << 16); payload in words[1..5]. */
-	msg->words[0] = (uint32_t)len | (ULMK_DEV_F_INLINE << 16);
+	/* words[0] = len; payload in words[1..5]; caller flags the label. */
+	msg->words[0] = (uint32_t)len;
 	msg->words[1] = 0u;
 	msg->words[2] = 0u;
 	msg->words[3] = 0u;
@@ -160,6 +160,7 @@ int ulmk_write(ulmk_dev_t *dev, const void *buf, size_t len)
 
 	msg.label = ULMK_DEV_REQ_WRITE;
 	if (len <= ULMK_DEV_INLINE_BYTES) {
+		msg.label |= ULMK_DEV_REQ_F_INLINE;
 		pack_inline(&msg, buf, len);
 	} else {
 		rc = ensure_grant(dev, buf, len);
@@ -190,7 +191,8 @@ int ulmk_read(ulmk_dev_t *dev, void *buf, size_t len)
 
 	msg.label = ULMK_DEV_REQ_READ;
 	if (len <= ULMK_DEV_INLINE_BYTES) {
-		msg.words[0] = (uint32_t)len | (ULMK_DEV_F_INLINE << 16);
+		msg.label |= ULMK_DEV_REQ_F_INLINE;
+		msg.words[0] = (uint32_t)len;
 	} else {
 		rc = ensure_grant(dev, buf, len);
 		if (rc != ULMK_OK)
@@ -281,6 +283,7 @@ int ulmk_dev_submit(ulmk_dev_t *dev, const void *buf, size_t len)
 	if (len > 0u && !buf)
 		return ULMK_EINVAL;
 
+	msg.label = ULMK_DEV_REQ_SUBMIT;
 	if (len > ULMK_DEV_INLINE_BYTES) {
 		rc = ensure_grant(dev, buf, len);
 		if (rc != ULMK_OK)
@@ -288,11 +291,11 @@ int ulmk_dev_submit(ulmk_dev_t *dev, const void *buf, size_t len)
 		msg.words[0] = (uint32_t)(uintptr_t)buf;
 		msg.words[1] = (uint32_t)len;
 	} else if (len > 0u) {
+		msg.label |= ULMK_DEV_REQ_F_INLINE;
 		pack_inline(&msg, buf, len);
 	} else {
 		msg.words[0] = 0u;
 	}
-	msg.label = ULMK_DEV_REQ_SUBMIT;
 	rc = ulmk_ep_call(dev->ep, &msg);
 	if (rc != ULMK_OK)
 		return rc;
@@ -311,7 +314,8 @@ int ulmk_dev_wait(ulmk_dev_t *dev, void *buf, size_t len)
 	msg.label = ULMK_DEV_REQ_WAIT;
 	if (len > 0u && buf) {
 		if (len <= ULMK_DEV_INLINE_BYTES) {
-			msg.words[0] = (uint32_t)len | (ULMK_DEV_F_INLINE << 16);
+			msg.label |= ULMK_DEV_REQ_F_INLINE;
+			msg.words[0] = (uint32_t)len;
 		} else {
 			rc = ensure_grant(dev, buf, len);
 			if (rc != ULMK_OK)

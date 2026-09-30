@@ -32,7 +32,18 @@
 #define ULMK_DEV_REQ_WAIT		0x07u
 #define ULMK_DEV_REQ_IOCTL		0x40u
 
-/* words[2] flag on READ/WRITE: payload lives in words[1..] of the reply/req. */
+/*
+ * Label flag on READ/WRITE/SUBMIT/WAIT requests: words[0] = length and the
+ * payload travels in words[1..5].  Without it words[0] is the granted
+ * buffer's address, which can hold any bit pattern, so the flag cannot live
+ * there.  Class ioctl codes must leave this bit clear.
+ */
+#define ULMK_DEV_REQ_F_INLINE		(1u << 31)
+
+/*
+ * Reply side (words[0] = count | ULMK_DEV_F_INLINE << 16, payload in
+ * words[1..]) and the flags argument of the read/write ops.
+ */
 #define ULMK_DEV_F_INLINE		(1u << 0)
 
 typedef struct {

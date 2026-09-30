@@ -23,7 +23,7 @@ int proto_disp_handle(struct proto_msg *msg)
 	struct ulmk_disp_present_hdr hdr;
 	const uint8_t *src;
 
-	switch (msg->label) {
+	switch (msg->label & ~ULMK_DEV_REQ_F_INLINE) {
 	case ULMK_DEV_REQ_OPEN:
 	case ULMK_DEV_REQ_CLOSE:
 		msg->words[0] = (uint32_t)ULMK_OK;
@@ -34,7 +34,7 @@ int proto_disp_handle(struct proto_msg *msg)
 		msg->words[0] = (uint32_t)ULMK_ENOTSUP;
 		return ULMK_ENOTSUP;
 	case ULMK_DEV_REQ_WRITE:
-		if ((msg->words[0] >> 16) & ULMK_DEV_F_INLINE) {
+		if (msg->label & ULMK_DEV_REQ_F_INLINE) {
 			len = msg->words[0] & 0xFFFFu;
 			if (len < sizeof(hdr)) {
 				msg->words[0] = (uint32_t)ULMK_EINVAL;
@@ -81,7 +81,7 @@ int proto_disp_handle(struct proto_msg *msg)
 
 int proto_input_handle(struct proto_msg *msg)
 {
-	switch (msg->label) {
+	switch (msg->label & ~ULMK_DEV_REQ_F_INLINE) {
 	case ULMK_DEV_REQ_OPEN:
 	case ULMK_DEV_REQ_CLOSE:
 		msg->words[0] = (uint32_t)ULMK_OK;

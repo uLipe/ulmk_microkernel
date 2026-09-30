@@ -73,7 +73,7 @@ static void echo_server(void *arg)
 		reply.words[4] = 0u;
 		reply.words[5] = 0u;
 
-		switch (msg.label) {
+		switch (msg.label & ~ULMK_DEV_REQ_F_INLINE) {
 		case ULMK_DEV_REQ_OPEN:
 			g_echo_len = 0u;
 			reply.words[0] = (uint32_t)ULMK_OK;
@@ -85,7 +85,7 @@ static void echo_server(void *arg)
 			break;
 
 		case ULMK_DEV_REQ_WRITE:
-			if ((msg.words[0] >> 16) & ULMK_DEV_F_INLINE) {
+			if (msg.label & ULMK_DEV_REQ_F_INLINE) {
 				len = msg.words[0] & 0xFFFFu;
 				if (len > ECHO_BUF)
 					len = ECHO_BUF;
@@ -113,7 +113,7 @@ static void echo_server(void *arg)
 			break;
 
 		case ULMK_DEV_REQ_READ:
-			if ((msg.words[0] >> 16) & ULMK_DEV_F_INLINE) {
+			if (msg.label & ULMK_DEV_REQ_F_INLINE) {
 				len = msg.words[0] & 0xFFFFu;
 				if (len > g_echo_len)
 					len = g_echo_len;
@@ -182,7 +182,7 @@ static void disp_server(void *arg)
 		reply.words[4] = 0u;
 		reply.words[5] = 0u;
 
-		switch (msg.label) {
+		switch (msg.label & ~ULMK_DEV_REQ_F_INLINE) {
 		case ULMK_DEV_REQ_OPEN:
 		case ULMK_DEV_REQ_CLOSE:
 			reply.words[0] = (uint32_t)ULMK_OK;
@@ -200,7 +200,7 @@ static void disp_server(void *arg)
 			uint32_t i;
 			uint32_t plen;
 
-			if (!((msg.words[0] >> 16) & ULMK_DEV_F_INLINE)) {
+			if (!(msg.label & ULMK_DEV_REQ_F_INLINE)) {
 				reply.words[0] =
 					(uint32_t)(int32_t)ULMK_EINVAL;
 				break;
@@ -279,7 +279,7 @@ static void input_server(void *arg)
 		reply.words[4] = 0u;
 		reply.words[5] = 0u;
 
-		switch (msg.label) {
+		switch (msg.label & ~ULMK_DEV_REQ_F_INLINE) {
 		case ULMK_DEV_REQ_OPEN:
 		case ULMK_DEV_REQ_CLOSE:
 			reply.words[0] = (uint32_t)ULMK_OK;
