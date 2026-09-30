@@ -43,6 +43,13 @@
 #define ULMK_BOARD_TIMER_HW_CLOCK_HZ	1000000000u
 #define ULMK_BOARD_TICK_CLOCK_HZ	10000000u
 
+/*
+ * board_timer_now_ticks() reads the low word of CLINT mtime.  QEMU runs the
+ * harts untimed, so the CPU clock is nominal and only feeds reports.
+ */
+#define ULMK_BOARD_FSTM_HZ		ULMK_BOARD_TICK_CLOCK_HZ
+#define ULMK_BOARD_FCPU_HZ		100000000u
+
 #ifndef ULMK_ARCH_HAVE_FPU
 #define ULMK_ARCH_HAVE_FPU		0
 #endif

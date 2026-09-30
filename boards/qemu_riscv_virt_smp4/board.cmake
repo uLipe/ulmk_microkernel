@@ -20,7 +20,11 @@ set(ULMK_BOARD_SOURCES
     board_timer.c
     board_services.c
     board_sim_exit.c
+    board_hil.c
 )
+
+# board_config.h / board_timer.h for components (silicon_* cases).
+set(ULMK_BOARD_INCLUDES "${CMAKE_CURRENT_LIST_DIR}")
 
 set(UL_BOARD_QEMU_MACHINE "virt")
 set(UL_BOARD_QEMU_CPU "rv32")

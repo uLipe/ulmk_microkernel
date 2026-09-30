@@ -244,9 +244,3 @@ void board_console_printf(const char *fmt, ...)
 	va_end(ap);
 	console_write(buf, pos);
 }
-
-ulmk_tid_t board_console_start(const ulmk_boot_info_t *info)
-{
-	(void)info;
-	return ULMK_TID_INVALID;
-}

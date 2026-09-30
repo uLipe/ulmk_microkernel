@@ -20,6 +20,7 @@
 #define UART_LSR_TX_IDLE		(1u << 5)
 
 static ulmk_ep_t          g_ep __attribute__((section(".user_bss")));
+static ulmk_tid_t         g_tid __attribute__((section(".user_bss")));
 static volatile uint8_t *g_uart __attribute__((section(".user_bss")));
 
 ulmk_ep_t board_service_ep(void)
@@ -88,14 +89,18 @@ void ulmk_board_init(void)
 {
 }
 
-void board_services_init(const ulmk_boot_info_t *info)
+/* Idempotent: silicon cases call it directly, board_services_init too. */
+ulmk_tid_t board_console_start(const ulmk_boot_info_t *info)
 {
 	ulmk_thread_attr_t attr = {0};
-	ulmk_tid_t         tid;
 
 	(void)info;
+	if (g_tid != ULMK_TID_INVALID)
+		return g_tid;
 
 	g_ep = ulmk_ep_create();
+	if (g_ep == ULMK_EP_INVALID)
+		return ULMK_TID_INVALID;
 
 	attr.name       = "bsvc";
 	attr.entry      = board_server;
@@ -103,10 +108,16 @@ void board_services_init(const ulmk_boot_info_t *info)
 	attr.stack_size = 4096u;
 	attr.privilege  = ULMK_PRIV_DRIVER;
 
-	tid = ulmk_thread_create(&attr);
-	if (tid == ULMK_TID_INVALID)
-		return;
+	g_tid = ulmk_thread_create(&attr);
+	if (g_tid == ULMK_TID_INVALID)
+		return ULMK_TID_INVALID;
+	ulmk_cap_grant(g_tid, ULMK_CAP_MAP_PERIPH);
+	return g_tid;
+}
 
-	ulmk_cap_grant(tid, ULMK_CAP_MAP_PERIPH);
+void board_services_init(const ulmk_boot_info_t *info)
+{
+	if (board_console_start(info) == ULMK_TID_INVALID)
+		return;
 	(void)board_timer_start(info);
 }
