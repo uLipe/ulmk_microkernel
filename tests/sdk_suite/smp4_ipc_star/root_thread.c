@@ -122,7 +122,7 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	attr.priority = 2u;
 	attr.stack_size = 4096u;
 	attr.privilege = ULMK_PRIV_DRIVER;
-	attr.heap_size = 0u;
+	attr.caps = ULMK_CAP_INHERIT;
 	attr.cpu = 3u;
 	tid = ulmk_thread_create(&attr);
 	if (tid == ULMK_TID_INVALID) {
@@ -147,7 +147,7 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 		attr.priority = 3u;
 		attr.stack_size = 4096u;
 		attr.privilege = ULMK_PRIV_DRIVER;
-		attr.heap_size = 0u;
+		attr.caps = ULMK_CAP_INHERIT;
 		attr.cpu = (uint8_t)cpu;
 		tid = ulmk_thread_create(&attr);
 		if (tid == ULMK_TID_INVALID) {

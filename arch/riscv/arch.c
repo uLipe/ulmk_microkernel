@@ -535,191 +535,120 @@ static inline void pmp_board_extra(void)
 #endif
 }
 
-static void pmp_kernel_layout(void)
-{
-	uintptr_t kexec_lo;
-	uintptr_t kexec_hi;
-	uintptr_t utext_lo;
-	uintptr_t utext_hi;
-	uintptr_t kram_lo;
-	uintptr_t kram_hi;
-	uintptr_t uram_lo;
-	uintptr_t uram_hi;
-	uintptr_t mmio_lo;
-	uintptr_t mmio_hi;
+/*
+ * M-mode is not subject to unlocked PMP entries, so the kernel needs no
+ * layout of its own: every entry describes what the current U-mode thread
+ * may touch.  Static windows (user text, user .data/.bss, MMIO) and the
+ * pinned stack are written on a switch; everything else the thread maps is
+ * loaded into the dynamic slots on its first access fault.
+ */
+#define PMP_BIT(n)	(1u << (n))
 
-	extern uint8_t _ulmk_kernel_exec_start[];
-	extern uint8_t _ulmk_kernel_exec_end[];
-	extern uint8_t _ulmk_user_text_start[];
-	extern uint8_t _ulmk_user_text_end[];
-	extern uint8_t _ulmk_kernel_data_start[];
-	extern uint8_t _ulmk_kernel_ram_end[];
-	extern uint8_t _ulmk_user_ram_start[];
-	extern uint8_t _ulmk_user_pool_end[];
-	extern uintptr_t _ulmk_mem_periph_base[];
-	extern uintptr_t _ulmk_mem_periph_end[];
+#if ULMK_ARCH_PMP_URAM_TOR
+#define PMP_URAM_SLOTS	(PMP_BIT(ULMK_ARCH_PMP_URAM) | \
+			 PMP_BIT(ULMK_ARCH_PMP_URAM - 1))
+#else
+#define PMP_URAM_SLOTS	PMP_BIT(ULMK_ARCH_PMP_URAM)
+#endif
 
-	kexec_lo = (uintptr_t)_ulmk_kernel_exec_start;
-	kexec_hi = (uintptr_t)_ulmk_kernel_exec_end;
-	utext_lo = (uintptr_t)_ulmk_user_text_start;
-	utext_hi = (uintptr_t)_ulmk_user_text_end;
-	kram_lo  = (uintptr_t)_ulmk_kernel_data_start;
-	kram_hi  = (uintptr_t)_ulmk_kernel_ram_end;
-	uram_lo  = (uintptr_t)_ulmk_user_ram_start;
-	uram_hi  = (uintptr_t)_ulmk_user_pool_end;
-	mmio_lo  = (uintptr_t)_ulmk_mem_periph_base;
-	mmio_hi  = (uintptr_t)_ulmk_mem_periph_end;
+#define PMP_FREE_SLOTS	((uint32_t)(((1ull << ULMK_ARCH_PMP_NUM) - 1u) & \
+			 ~(uint64_t)(ULMK_ARCH_PMP_RESERVED_MASK | \
+				     PMP_BIT(ULMK_ARCH_PMP_UTEXT) | PMP_URAM_SLOTS | \
+				     PMP_BIT(ULMK_ARCH_PMP_MMIO) | \
+				     PMP_BIT(ULMK_ARCH_PMP_TEMP0) | \
+				     PMP_BIT(ULMK_ARCH_PMP_TEMP1))))
 
-	pmp_clear_all();
-
-	if (kexec_hi > kexec_lo)
-		pmp_set_napot(ULMK_ARCH_PMP_KERNEL, kexec_lo, kexec_hi - kexec_lo,
-			      PMP_R | PMP_X);
-
-	if (kram_hi > kram_lo)
-		pmp_set_napot(ULMK_ARCH_PMP_KRAM, kram_lo, kram_hi - kram_lo,
-			      PMP_R | PMP_W);
-
-	if (utext_hi > utext_lo)
-		pmp_set_napot(ULMK_ARCH_PMP_UTEXT, utext_lo, utext_hi - utext_lo,
-			      PMP_R | PMP_X);
-
-	if (uram_hi > uram_lo)
-		pmp_set_uram(uram_lo, uram_hi);
-
-	if (mmio_hi > mmio_lo)
-		pmp_set_napot(ULMK_ARCH_PMP_MMIO, mmio_lo, mmio_hi - mmio_lo,
-			      PMP_R | PMP_W);
-
-	pmp_board_extra();
-
-	(void)kexec_lo;
-}
-
-static void pmp_user_layout(const ulmk_arch_region_t *regions, uint8_t count)
-{
-	uintptr_t utext_lo;
-	uintptr_t utext_hi;
-	uintptr_t uram_lo;
-	uintptr_t uram_hi;
-	uintptr_t mmio_lo;
-	uintptr_t mmio_hi;
-	uint8_t   slot;
-	uint8_t   i;
-
-	extern uint8_t _ulmk_user_text_start[];
-	extern uint8_t _ulmk_user_text_end[];
-	extern uint8_t _ulmk_user_ram_start[];
-	extern uint8_t _ulmk_user_pool_end[];
-	extern uintptr_t _ulmk_mem_periph_base[];
-	extern uintptr_t _ulmk_mem_periph_end[];
-
-	utext_lo = (uintptr_t)_ulmk_user_text_start;
-	utext_hi = (uintptr_t)_ulmk_user_text_end;
-	uram_lo  = (uintptr_t)_ulmk_user_ram_start;
-	uram_hi  = (uintptr_t)_ulmk_user_pool_end;
-	mmio_lo  = (uintptr_t)_ulmk_mem_periph_base;
-	mmio_hi  = (uintptr_t)_ulmk_mem_periph_end;
-
-	pmp_clear_all();
-
-	if (utext_hi > utext_lo)
-		pmp_set_napot(ULMK_ARCH_PMP_UTEXT, utext_lo, utext_hi - utext_lo,
-			      PMP_R | PMP_X);
-
-	if (uram_hi > uram_lo)
-		pmp_set_uram(uram_lo, uram_hi);
-
-	if (mmio_hi > mmio_lo)
-		pmp_set_napot(ULMK_ARCH_PMP_MMIO, mmio_lo, mmio_hi - mmio_lo,
-			      PMP_R | PMP_W);
-
-	/*
-	 * STACK sits inside the static URAM window — skip it.
-	 * Dynamic domain grants use NAPOT on free slots (leave TEMP0/1 alone).
-	 */
-	slot = ULMK_ARCH_PMP_DYNAMIC_BASE;
-	if (regions && count > 0u) {
-		for (i = 0u; i < count && slot < ULMK_ARCH_PMP_NUM; i++) {
-			uint8_t perm = 0u;
-
-			if (regions[i].type == ULMK_REGION_STACK)
-				continue;
-			if (slot == 11u || slot == 12u || slot == 13u ||
-			    slot == (uint8_t)ULMK_ARCH_PMP_TEMP0 ||
-			    slot == (uint8_t)ULMK_ARCH_PMP_TEMP1) {
-				slot++;
-				i--;
-				continue;
-			}
-
-			if (regions[i].perms & ULMK_PERM_READ)
-				perm |= PMP_R;
-			if (regions[i].perms & ULMK_PERM_WRITE)
-				perm |= PMP_W;
-			if (regions[i].perms & ULMK_PERM_EXEC)
-				perm |= PMP_X;
-
-			pmp_set_napot(slot, regions[i].base, regions[i].size,
-				      perm);
-			slot++;
-		}
-	}
-
-	pmp_board_extra();
-}
+extern uint8_t _ulmk_user_text_start[];
+extern uint8_t _ulmk_user_text_end[];
+extern uint8_t _ulmk_user_ram_start[];
+extern uint8_t _ulmk_user_pool_start[];
+extern uintptr_t _ulmk_mem_periph_base[];
+extern uintptr_t _ulmk_mem_periph_end[];
 
 /*
- * Overlay domain grants on free high slots without wiping boot PMP.
+ * PMP CSRs are per-hart, and so is the layout they hold.  @pinned is the
+ * key: it is the TCB's own pinned list, so the same thread coming back
+ * keeps its dynamic windows and any other thread gets a fresh layout.
  */
-static void pmp_user_overlay(const ulmk_arch_region_t *regions, uint8_t count)
+struct pmp_cpu {
+	const ulmk_arch_region_t *pinned;
+	uint32_t dyn;
+	uint8_t  next;
+};
+
+static struct pmp_cpu g_pmp_cpu[ULMK_ARCH_NUM_CPU];
+
+static struct pmp_cpu *pmp_cpu(void)
 {
-	uint8_t slot;
-	uint8_t i;
+	uint32_t cpu = ulmk_arch_cpu_id();
 
-	slot = ULMK_ARCH_PMP_DYNAMIC_BASE;
-	if (regions && count > 0u) {
-		for (i = 0u; i < count && slot < ULMK_ARCH_PMP_NUM; i++) {
-			uint8_t perm = 0u;
+	return &g_pmp_cpu[cpu < (uint32_t)ULMK_ARCH_NUM_CPU ? cpu : 0u];
+}
 
-			if (regions[i].type == ULMK_REGION_STACK)
-				continue;
-			if (slot == 11u || slot == 12u || slot == 13u ||
-			    slot == (uint8_t)ULMK_ARCH_PMP_TEMP0 ||
-			    slot == (uint8_t)ULMK_ARCH_PMP_TEMP1) {
-				slot++;
-				i--;
-				continue;
-			}
+static void pmp_off(uint8_t idx)
+{
+	pmp_write_cfg(idx, 0u);
+	pmp_write_addr(idx, 0u);
+}
 
-			if (regions[i].perms & ULMK_PERM_READ)
-				perm |= PMP_R;
-			if (regions[i].perms & ULMK_PERM_WRITE)
-				perm |= PMP_W;
-			if (regions[i].perms & ULMK_PERM_EXEC)
-				perm |= PMP_X;
+static void pmp_static_user(void)
+{
+	uintptr_t lo;
+	uintptr_t hi;
 
-			pmp_set_napot(slot, regions[i].base, regions[i].size,
-				      perm);
-			slot++;
-		}
+	lo = (uintptr_t)_ulmk_user_text_start;
+	hi = (uintptr_t)_ulmk_user_text_end;
+	if (hi > lo)
+		pmp_set_napot(ULMK_ARCH_PMP_UTEXT, lo, hi - lo, PMP_R | PMP_X);
+
+	/* The pool above user .data/.bss is kernel heap: areas only. */
+	lo = (uintptr_t)_ulmk_user_ram_start;
+	hi = (uintptr_t)_ulmk_user_pool_start;
+	if (hi > lo)
+		pmp_set_uram(lo, hi);
+
+	lo = (uintptr_t)_ulmk_mem_periph_base;
+	hi = (uintptr_t)_ulmk_mem_periph_end;
+	if (hi > lo)
+		pmp_set_napot(ULMK_ARCH_PMP_MMIO, lo, hi - lo, PMP_R | PMP_W);
+}
+
+static bool pmp_covered_by_uram(const ulmk_arch_region_t *r)
+{
+	return r->base >= (uintptr_t)_ulmk_user_ram_start &&
+	       r->base + r->size <= (uintptr_t)_ulmk_user_pool_start;
+}
+
+static void pmp_user_layout(struct pmp_cpu *c,
+			    const ulmk_arch_region_t *pinned, uint8_t count)
+{
+	uint32_t free = PMP_FREE_SLOTS;
+	uint8_t  slot;
+	uint8_t  i;
+
+	pmp_clear_all();
+	pmp_static_user();
+
+	for (i = 0u; pinned && i < count && free; i++) {
+		if (pmp_covered_by_uram(&pinned[i]))
+			continue;
+		slot = (uint8_t)__builtin_ctz(free);
+		free &= ~PMP_BIT(slot);
+		pmp_set_napot(slot, pinned[i].base, pinned[i].size,
+			      perms_to_pmp(pinned[i].perms));
 	}
+
 	pmp_board_extra();
+	c->dyn  = free;
+	c->next = 0u;
 }
 
 void ulmk_arch_mpu_init(void)
 {
 	if (ULMK_ARCH_PMP_NUM == 0u)
 		return;
-#if ULMK_ARCH_PMP_PRESERVE_BOOT
-	/*
-	 * Boot locked entries stay.  Only add board extras (LP/PSRAM) on
-	 * free high slots — full replace needs mseccfg.RLB (SoC-dependent).
-	 */
+	pmp_clear_all();
 	pmp_board_extra();
-#else
-	pmp_kernel_layout();
-#endif
 }
 
 void ulmk_arch_mpu_enable(void)
@@ -741,97 +670,112 @@ void ulmk_arch_mpu_configure(uint8_t prs, const ulmk_arch_region_t *regions,
 	(void)count;
 }
 
-/*
- * PMP CSRs are per-hart.  The "last programmed" cache must not be global or
- * one CPU's switch causes another's mpu_switch to skip a real rewrite.
- */
-struct pmp_cpu_cache {
-	const ulmk_arch_region_t *regions;
-	uint8_t count;
-	uint8_t prs;
-	uint8_t dyn;
-};
-
-/*
- * prs=0xFF forces the first mpu_switch on every hart to program PMP.
- * Zero-init would equal ULMK_ARCH_PRS_KERNEL and skip the first rewrite
- * on CPU2+ when NUM_CPU > 2.
- */
-static struct pmp_cpu_cache g_pmp_cache[ULMK_ARCH_NUM_CPU] = {
-	[0 ... ULMK_ARCH_NUM_CPU - 1] = { .prs = 0xFFu },
-};
-
-static uint8_t pmp_dyn_count(const ulmk_arch_region_t *regions, uint8_t count)
-{
-	uint8_t n = 0u;
-	uint8_t i;
-
-	if (!regions)
-		return 0u;
-	for (i = 0u; i < count; i++) {
-		if (regions[i].type != ULMK_REGION_STACK)
-			n++;
-	}
-	return n;
-}
-
 void ulmk_arch_mpu_switch(const ulmk_arch_region_t *regions, uint8_t count,
 			uint8_t prs)
 {
-	struct pmp_cpu_cache *c;
-	uint32_t              cpu;
-	uint8_t               eff;
+	struct pmp_cpu *c;
 
-	if (ULMK_ARCH_PMP_NUM == 0u) {
-		(void)regions;
-		(void)count;
-		(void)prs;
+	if (ULMK_ARCH_PMP_NUM == 0u)
 		return;
-	}
 
-	cpu = ulmk_arch_cpu_id();
-	if (cpu >= (uint32_t)ULMK_ARCH_NUM_CPU)
-		cpu = 0u;
-	c = &g_pmp_cache[cpu];
-
+	c = pmp_cpu();
 	/*
-	 * On SMP only skip when this hart already has the exact same layout.
-	 * The stack-only fast path was UP-friendly but races badly when another
-	 * hart's view of "already programmed" is assumed.
+	 * A kernel thread cannot see the entries, so leave them in place but
+	 * forget the owner: the next user thread, even the same one, gets a
+	 * fresh layout because its areas may have changed meanwhile.
 	 */
-	if (prs == c->prs && regions == c->regions && count == c->count)
-		return;
-
-	eff = (prs == ULMK_ARCH_PRS_KERNEL) ? 0u : pmp_dyn_count(regions, count);
-
-#if !ULMK_CONFIG_ENABLE_SMP
-	/* Stack-only AS: static URAM covers stacks — skip full PMP rewrite. */
-	if (prs == c->prs && eff == 0u && c->dyn == 0u &&
-	    prs != ULMK_ARCH_PRS_KERNEL) {
-		c->regions = regions;
-		c->count   = count;
-		return;
-	}
-#endif
-
 	if (prs == ULMK_ARCH_PRS_KERNEL) {
-#if ULMK_ARCH_PMP_PRESERVE_BOOT
-		pmp_board_extra();
-#else
-		pmp_kernel_layout();
-#endif
-	} else {
-#if ULMK_ARCH_PMP_PRESERVE_BOOT
-		pmp_user_overlay(regions, count);
-#else
-		pmp_user_layout(regions, count);
-#endif
+		c->pinned = NULL;
+		return;
+	}
+	if (c->pinned == regions && regions)
+		return;
+
+	pmp_user_layout(c, regions, count);
+	c->pinned = regions;
+}
+
+void ulmk_arch_mpu_flush(void)
+{
+	struct pmp_cpu *c;
+	uint32_t m;
+
+	if (ULMK_ARCH_PMP_NUM == 0u)
+		return;
+
+	c = pmp_cpu();
+	for (m = c->dyn; m; m &= m - 1u)
+		pmp_off((uint8_t)__builtin_ctz(m));
+}
+
+static bool napot_encode(const ulmk_arch_region_t *w, uint32_t *addr)
+{
+	if (w->size < 8u || (w->size & (w->size - 1u)) ||
+	    (w->base & (w->size - 1u)))
+		return false;
+	*addr = pmp_addr_encode(w->base) | ((uint32_t)(w->size >> 3u) - 1u);
+	return true;
+}
+
+static uint32_t pmp_read_addr(uint8_t idx)
+{
+	uint32_t v = 0u;
+
+	switch (idx) {
+	case 0: __asm__ volatile("csrr %0, pmpaddr0" : "=r"(v)); break;
+	case 1: __asm__ volatile("csrr %0, pmpaddr1" : "=r"(v)); break;
+	case 2: __asm__ volatile("csrr %0, pmpaddr2" : "=r"(v)); break;
+	case 3: __asm__ volatile("csrr %0, pmpaddr3" : "=r"(v)); break;
+	case 4: __asm__ volatile("csrr %0, pmpaddr4" : "=r"(v)); break;
+	case 5: __asm__ volatile("csrr %0, pmpaddr5" : "=r"(v)); break;
+	case 6: __asm__ volatile("csrr %0, pmpaddr6" : "=r"(v)); break;
+	case 7: __asm__ volatile("csrr %0, pmpaddr7" : "=r"(v)); break;
+	case 8: __asm__ volatile("csrr %0, pmpaddr8" : "=r"(v)); break;
+	case 9: __asm__ volatile("csrr %0, pmpaddr9" : "=r"(v)); break;
+	case 10: __asm__ volatile("csrr %0, pmpaddr10" : "=r"(v)); break;
+	case 11: __asm__ volatile("csrr %0, pmpaddr11" : "=r"(v)); break;
+	case 12: __asm__ volatile("csrr %0, pmpaddr12" : "=r"(v)); break;
+	case 13: __asm__ volatile("csrr %0, pmpaddr13" : "=r"(v)); break;
+	case 14: __asm__ volatile("csrr %0, pmpaddr14" : "=r"(v)); break;
+	case 15: __asm__ volatile("csrr %0, pmpaddr15" : "=r"(v)); break;
+	default: break;
+	}
+	return v;
+}
+
+bool ulmk_arch_mpu_load(const ulmk_arch_region_t *win)
+{
+	struct pmp_cpu *c;
+	uint32_t addr;
+	uint32_t m;
+	uint8_t  n;
+	uint8_t  slot;
+	uint8_t  i;
+
+	if (ULMK_ARCH_PMP_NUM == 0u || !napot_encode(win, &addr))
+		return false;
+
+	c = pmp_cpu();
+	if (!c->dyn)
+		return false;
+
+	/* The window is live yet the access faulted: a real violation. */
+	for (m = c->dyn; m; m &= m - 1u) {
+		if (pmp_read_addr((uint8_t)__builtin_ctz(m)) == addr)
+			return false;
 	}
 
-	c->prs     = prs;
-	c->regions = regions;
-	c->count   = count;
-	c->dyn     = eff;
+	n = (uint8_t)__builtin_popcount(c->dyn);
+	m = c->dyn;
+	for (i = 0u; i < c->next % n; i++)
+		m &= m - 1u;
+	slot = (uint8_t)__builtin_ctz(m);
+	c->next = (uint8_t)((c->next + 1u) % n);
+
+	pmp_write_cfg(slot, 0u);
+	pmp_write_addr(slot, addr);
+	pmp_write_cfg(slot, perms_to_pmp(win->perms) | PMP_A_NAPOT);
+	return true;
 }
 
 bool ulmk_arch_mpu_addr_permitted(uintptr_t addr, size_t size, uint32_t perms)
@@ -866,8 +810,8 @@ void _ulmk_trap_dispatch(struct riscv_trap_frame *frame)
 	uint32_t ret;
 	uint32_t args[4];
 	uint32_t code;
-
-	ulmk_arch_mpu_switch(NULL, 0, ULMK_ARCH_PRS_KERNEL);
+	uint32_t access;
+	uint32_t mtval;
 
 	if (mcause & MCAUSE_INT_BIT) {
 		riscv_irq_handle_interrupt(mcause);
@@ -908,6 +852,16 @@ void _ulmk_trap_dispatch(struct riscv_trap_frame *frame)
 	 * faults are recoverable (kill thread).  M-mode faults panic.
 	 */
 	mstatus = frame->regs[TF_MSTATUS / 4u];
+	if (((mstatus >> MSTATUS_MPP_SHIFT) & 3u) == 0u &&
+	    (code == MCAUSE_LOAD_FAULT || code == MCAUSE_STORE_FAULT ||
+	     code == MCAUSE_INST_FAULT)) {
+		access = (code == MCAUSE_LOAD_FAULT)  ? ULMK_PERM_READ :
+			 (code == MCAUSE_STORE_FAULT) ? ULMK_PERM_WRITE :
+							ULMK_PERM_EXEC;
+		__asm__ volatile("csrr %0, mtval" : "=r"(mtval));
+		if (ulmk_kern_mem_fault((uintptr_t)mtval, access))
+			return;
+	}
 	if (((mstatus >> MSTATUS_MPP_SHIFT) & 3u) == 0u &&
 	    (code == MCAUSE_LOAD_FAULT || code == MCAUSE_STORE_FAULT ||
 	     code == MCAUSE_INST_FAULT || code == MCAUSE_ILLEGAL_INST))

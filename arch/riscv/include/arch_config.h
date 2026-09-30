@@ -40,6 +40,10 @@
 #define ULMK_ARCH_MAX_REGIONS	12
 #define ULMK_ARCH_REGION_ALIGN	64
 
+/* Lazy windows are single NAPOT entries (TOR would cost two slots). */
+#define ULMK_ARCH_MPU_WIN_POW2	1
+#define ULMK_ARCH_MPU_WIN_MIN	8u
+
 /*
  * Slot map.  Boards override when boot firmware locks slots: a write to a
  * locked entry is discarded by the hardware, so a role left on top of one is

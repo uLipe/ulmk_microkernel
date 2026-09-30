@@ -508,26 +508,59 @@ static void mpu_write_enables(uint8_t prs, uint32_t dpre, uint32_t dpwe,
  * ========================================================================= */
 
 /*
- * Static DPR/CPR layout (configured once at boot):
+ * Static DPR/CPR layout (configured once per core at boot):
  *
  *   DPR 0: entire 4 GiB (PRS 0 R+W bypass)
  *   DPR 1: kernel static RAM (PRS 0 only)
- *   DPR 2: userspace RAM (PRS 1 R+W)
- *   DPR 3: flash read + MMIO (PRS 1 R+W)
- *   DPR ULMK_ARCH_MPU_USER_DPR_BASE+: per-thread dynamic (mpu_switch)
+ *   DPR 2: user .data/.bss (PRS 1 R+W)
+ *   DPR 3: global memory up to the local aliases (PRS 1 R)
+ *   DPR 4: peripherals (PRS 1 R+W)
+ *   DPR 5: current thread's stack (PRS 1 R+W, reloaded per switch)
+ *   DPR 6+: board virt console, then lazy area windows
  *
  *   CPR 0: kernel executable flash (PRS 0 X only)
  *   CPR 1: userspace executable flash (PRS 1 X only)
+ *
+ * The pool (kernel heap) is in no static window: TCBs, stacks and mapped
+ * areas are reached only through DPR 5 and the lazy windows.
  */
 
+#if ULMK_ARCH_MPU_LAZY
+#if defined(ULMK_BOARD_HAVE_VIRT_CONSOLE) && ULMK_BOARD_HAVE_VIRT_CONSOLE
+#define MPU_CONSOLE_DPR	ULMK_ARCH_MPU_USER_DPR_BASE
+#define MPU_DYN_BASE	(ULMK_ARCH_MPU_USER_DPR_BASE + 1)
+#else
+#define MPU_DYN_BASE	ULMK_ARCH_MPU_USER_DPR_BASE
+#endif
+#define MPU_DYN_COUNT	(ULMK_ARCH_MPU_NUM_DPR - MPU_DYN_BASE)
+#define MPU_DYN_MASK	(((1u << MPU_DYN_COUNT) - 1u) << MPU_DYN_BASE)
+
 /*
- * Last programmed userspace DPR layout — skips redundant CSFR traffic on
- * self-resched / unchanged domain, and only clears slots that were live.
+ * DPR bounds and enables are per-core CSFRs, so is this shadow.  @pinned is
+ * the key: the TCB's own pinned list, so the same thread coming back keeps
+ * its lazy windows.
  */
-static const ulmk_arch_region_t *g_mpu_regions;
-static uint8_t g_mpu_count;
-static uint8_t g_mpu_prs = 0xFFu;
-static uint8_t g_mpu_live;
+struct mpu_cpu {
+	const ulmk_arch_region_t *pinned;
+	uint32_t  dpre;
+	uint32_t  dpwe;
+	uintptr_t win[MPU_DYN_COUNT];
+	uint8_t   next;
+};
+
+static struct mpu_cpu g_mpu_cpu[ULMK_ARCH_NUM_CPU];
+
+static struct mpu_cpu *mpu_cpu(void)
+{
+	uint32_t cpu = ulmk_arch_cpu_id();
+
+	return &g_mpu_cpu[cpu < (uint32_t)ULMK_ARCH_NUM_CPU ? cpu : 0u];
+}
+#endif
+
+static uint32_t g_mpu_user_dpre;
+static uint32_t g_mpu_user_dpwe;
+static uint32_t g_mpu_user_cpxe;
 
 /*
  * AURIX CPR/DPR: address belongs to the range iff
@@ -540,6 +573,80 @@ static uint32_t mpu_range_upper(uintptr_t end)
 	return (uint32_t)end & ~7u;
 }
 
+static void mpu_perm_bits(uint32_t perms, uint8_t slot, uint32_t *dpre,
+			  uint32_t *dpwe)
+{
+	uint32_t bit = 1u << slot;
+
+	*dpre &= ~bit;
+	*dpwe &= ~bit;
+	if (perms & ULMK_PERM_READ)
+		*dpre |= bit;
+	if (perms & ULMK_PERM_WRITE)
+		*dpwe |= bit;
+}
+
+/* Static PRS 1 data windows; returns their DPRE/DPWE masks. */
+static void mpu_user_static(uint32_t *dpre, uint32_t *dpwe)
+{
+	extern uint8_t _ulmk_user_ram_start[];
+	extern uint8_t _ulmk_user_pool_start[];
+	extern uint8_t _ulmk_user_pool_end[];
+
+	uintptr_t uram_lo = (uintptr_t)_ulmk_user_ram_start;
+#if ULMK_ARCH_MPU_LAZY
+	extern uintptr_t _ulmk_mem_periph_base[];
+	extern uintptr_t _ulmk_mem_periph_end[];
+
+	uintptr_t uram_hi = (uintptr_t)_ulmk_user_pool_start;
+	uintptr_t mmio_lo = (uintptr_t)_ulmk_mem_periph_base;
+	uintptr_t mmio_hi = (uintptr_t)_ulmk_mem_periph_end;
+
+	(void)_ulmk_user_pool_end;
+#else
+	uintptr_t uram_hi = (uintptr_t)_ulmk_user_pool_end;
+
+	(void)_ulmk_user_pool_start;
+#endif
+
+	*dpre = 0u;
+	*dpwe = 0u;
+	if (uram_hi > uram_lo) {
+		mpu_write_dpr(ULMK_ARCH_MPU_URAM_DPR, (uint32_t)uram_lo,
+			      mpu_range_upper(uram_hi));
+		*dpre |= 1u << ULMK_ARCH_MPU_URAM_DPR;
+		*dpwe |= 1u << ULMK_ARCH_MPU_URAM_DPR;
+	}
+
+#if ULMK_ARCH_MPU_LAZY
+	/* .rodata and flash constants; LMU areas come in as lazy windows. */
+	mpu_write_dpr(ULMK_ARCH_MPU_FLASH_DPR, ULMK_BOARD_FLASH_BASE,
+		      ULMK_ARCH_LOCAL_ALIAS_BASE);
+	*dpre |= 1u << ULMK_ARCH_MPU_FLASH_DPR;
+
+	/* PERIPH usually ends at 4 GiB, so its end symbol wraps to 0. */
+	mpu_write_dpr(ULMK_ARCH_MPU_MMIO_DPR, (uint32_t)mmio_lo,
+		      mmio_hi > mmio_lo ? mpu_range_upper(mmio_hi) :
+					  0xFFFFFFF8u);
+	*dpre |= 1u << ULMK_ARCH_MPU_MMIO_DPR;
+	*dpwe |= 1u << ULMK_ARCH_MPU_MMIO_DPR;
+
+#ifdef MPU_CONSOLE_DPR
+	mpu_write_dpr(MPU_CONSOLE_DPR, ULMK_BOARD_VIRT_CONSOLE_BASE,
+		      ULMK_BOARD_VIRT_CONSOLE_BASE +
+		      ULMK_BOARD_VIRT_CONSOLE_SIZE);
+	*dpre |= 1u << MPU_CONSOLE_DPR;
+	*dpwe |= 1u << MPU_CONSOLE_DPR;
+#endif
+#else
+	/* Too few DPRs to split: flash, virt console and MMIO in one window. */
+	mpu_write_dpr(ULMK_ARCH_MPU_FLASH_DPR, ULMK_BOARD_FLASH_BASE,
+		      0xFFFFFFF8u);
+	*dpre |= 1u << ULMK_ARCH_MPU_FLASH_DPR;
+	*dpwe |= 1u << ULMK_ARCH_MPU_FLASH_DPR;
+#endif
+}
+
 void ulmk_arch_mpu_init(void)
 {
 	uint32_t syscon;
@@ -550,9 +657,6 @@ void ulmk_arch_mpu_init(void)
 	uintptr_t utext_hi;
 	uintptr_t kram_lo;
 	uintptr_t kram_hi;
-	uintptr_t uram_lo;
-	uintptr_t uram_hi;
-	uint32_t  prs1_cpxe;
 	uint32_t  prs0_cpr;
 
 	extern uint8_t _ulmk_kernel_exec_start[];
@@ -561,8 +665,6 @@ void ulmk_arch_mpu_init(void)
 	extern uint8_t _ulmk_user_text_end[];
 	extern uint8_t _ulmk_kernel_data_start[];
 	extern uint8_t _ulmk_kernel_ram_end[];
-	extern uint8_t _ulmk_user_ram_start[];
-	extern uint8_t _ulmk_user_pool_end[];
 
 	/* Disable protection during reconfiguration (SYSCON is EndInit). */
 	ulmk_board_cpu_endinit_clear();
@@ -570,11 +672,6 @@ void ulmk_arch_mpu_init(void)
 	mpu_mtcr(ULMK_ARCH_CSFR_SYSCON, syscon & ~ULMK_ARCH_SYSCON_PROTEN);
 	__asm__ volatile("isync" ::: "memory");
 	ulmk_board_cpu_endinit_set();
-
-	g_mpu_regions = NULL;
-	g_mpu_count   = 0u;
-	g_mpu_prs     = 0xFFu;
-	g_mpu_live    = 0u;
 
 	/* Zero implemented DPR/CPR ranges */
 	for (i = 0u; i < ULMK_ARCH_MPU_NUM_DPR; i++)
@@ -592,8 +689,6 @@ void ulmk_arch_mpu_init(void)
 	utext_hi = (uintptr_t)_ulmk_user_text_end;
 	kram_lo  = (uintptr_t)_ulmk_kernel_data_start;
 	kram_hi  = (uintptr_t)_ulmk_kernel_ram_end;
-	uram_lo  = (uintptr_t)_ulmk_user_ram_start;
-	uram_hi  = (uintptr_t)_ulmk_user_pool_end;
 
 	/* DPR 0: entire 4 GiB — kernel full R+W via PRS 0 */
 	mpu_write_dpr(ULMK_ARCH_MPU_KERNEL_DPR, 0x00000000u, 0xFFFFFFF8u);
@@ -603,18 +698,7 @@ void ulmk_arch_mpu_init(void)
 		mpu_write_dpr(ULMK_ARCH_MPU_KRAM_DPR, (uint32_t)kram_lo,
 			      mpu_range_upper(kram_hi));
 
-	/* DPR 2: userspace RAM (domains + heap pool) */
-	if (uram_hi > uram_lo)
-		mpu_write_dpr(ULMK_ARCH_MPU_URAM_DPR, (uint32_t)uram_lo,
-			      mpu_range_upper(uram_hi));
-
-	/*
-	 * DPR 3: flash read + virt console + peripherals in one coarse slot.
-	 * Execution is gated separately by CPR 1; this covers .rodata loads
-	 * and MMIO accesses for driver threads.
-	 */
-	mpu_write_dpr(ULMK_ARCH_MPU_MMIO_DPR,
-		      ULMK_BOARD_FLASH_BASE, 0xFFFFFFF8u);
+	mpu_user_static(&g_mpu_user_dpre, &g_mpu_user_dpwe);
 
 	/* CPR 0: kernel code only */
 	if (kexec_hi > kexec_lo)
@@ -628,12 +712,12 @@ void ulmk_arch_mpu_init(void)
 
 	__asm__ volatile("isync" ::: "memory");
 
-	prs1_cpxe = 0u;
+	g_mpu_user_cpxe = 0u;
 	if (utext_hi > utext_lo)
-		prs1_cpxe = (1u << ULMK_ARCH_MPU_CPR_USER);
+		g_mpu_user_cpxe = (1u << ULMK_ARCH_MPU_CPR_USER);
 
 	/*
-	 * PRS 0 (kernel): all static DPR slots + kernel CPR execute.
+	 * PRS 0 (kernel): all DPR slots + kernel CPR execute.
 	 * DPR 0 already covers the full address space.  The kernel also needs
 	 * execute over the userspace CPR: ulmk_user_thread_entry lives in user
 	 * text, and kernel-privileged threads (e.g. idle) start there too.
@@ -649,17 +733,13 @@ void ulmk_arch_mpu_init(void)
 			  (1u << ULMK_ARCH_MPU_NUM_DPR) - 1u,
 			  prs0_cpr);
 
-	/*
-	 * PRS 1 (userspace): user RAM + MMIO/flash read; execute only user CPR.
-	 * DPR 0 (kernel bypass) and DPR 1 (kernel RAM) are intentionally omitted.
-	 */
-	mpu_write_enables(1u,
-			  (1u << ULMK_ARCH_MPU_URAM_DPR) |
-			  (1u << ULMK_ARCH_MPU_MMIO_DPR),
-			  (1u << ULMK_ARCH_MPU_URAM_DPR) |
-			  (1u << ULMK_ARCH_MPU_MMIO_DPR),
-			  prs1_cpxe);
+	/* PRS 1 (userspace): DPR 0 (bypass) and DPR 1 (kernel RAM) omitted. */
+	mpu_write_enables(ULMK_ARCH_PRS_USER, g_mpu_user_dpre,
+			  g_mpu_user_dpwe, g_mpu_user_cpxe);
 
+#if ULMK_ARCH_MPU_LAZY
+	mpu_cpu()->pinned = NULL;
+#endif
 	/* PRS 2, 3: remain zeroed (unused) */
 }
 
@@ -685,229 +765,113 @@ void ulmk_arch_mpu_disable(void)
 	ulmk_board_cpu_endinit_set();
 }
 
-static void mpu_prs1_static_enables(uint32_t *dpre, uint32_t *dpwe,
-				    uint32_t *cpxe)
-{
-	uintptr_t utext_lo;
-	uintptr_t utext_hi;
-
-	extern uint8_t _ulmk_user_text_start[];
-	extern uint8_t _ulmk_user_text_end[];
-
-	utext_lo = (uintptr_t)_ulmk_user_text_start;
-	utext_hi = (uintptr_t)_ulmk_user_text_end;
-
-	*dpre = (1u << ULMK_ARCH_MPU_URAM_DPR) |
-		(1u << ULMK_ARCH_MPU_MMIO_DPR);
-	*dpwe = (1u << ULMK_ARCH_MPU_URAM_DPR) |
-		(1u << ULMK_ARCH_MPU_MMIO_DPR);
-	*cpxe = 0u;
-	if (utext_hi > utext_lo)
-		*cpxe = (1u << ULMK_ARCH_MPU_CPR_USER);
-}
-
-static void mpu_write_user_slot(uint8_t idx, const ulmk_arch_region_t *r,
-				uint32_t *dpre, uint32_t *dpwe)
-{
-	uint8_t d_slot = (uint8_t)(ULMK_ARCH_MPU_USER_DPR_BASE + idx);
-
-	if (d_slot >= ULMK_ARCH_MPU_NUM_DPR)
-		return;
-
-	mpu_write_dpr(d_slot,
-		      (uint32_t)r->base,
-		      (uint32_t)(r->base + r->size - 8u));
-	if (r->perms & ULMK_PERM_READ)
-		*dpre |= (1u << d_slot);
-	if (r->perms & ULMK_PERM_WRITE)
-		*dpwe |= (1u << d_slot);
-}
-
-/*
- * Dynamic DPR slots for the given PRS from @regions.
- * STACK is covered by the static URAM window — skip it so typical IPC
- * (stack-only AS) programs zero dynamic slots and can early-exit.
- * Regions that do not fit (QEMU: USER_DPR_BASE == NUM_DPR) are ignored.
- */
-static uint8_t mpu_dyn_count(const ulmk_arch_region_t *regions, uint8_t count,
-			     uint8_t max_dyn)
-{
-	uint8_t n = 0u;
-	uint8_t i;
-
-	if (!regions || max_dyn == 0u)
-		return 0u;
-
-	for (i = 0u; i < count && n < max_dyn; i++) {
-		if (regions[i].type != ULMK_REGION_STACK)
-			n++;
-	}
-	return n;
-}
-
-static void mpu_program_regions(uint8_t prs, const ulmk_arch_region_t *regions,
-				uint8_t count)
-{
-	uint32_t dpre;
-	uint32_t dpwe;
-	uint32_t cpxe;
-	uint8_t  i;
-	uint8_t  prog;
-	uint8_t  max_dyn;
-	uint8_t  eff;
-	uintptr_t utext_lo;
-	uintptr_t utext_hi;
-
-	extern uint8_t _ulmk_user_text_start[];
-	extern uint8_t _ulmk_user_text_end[];
-
-	utext_lo = (uintptr_t)_ulmk_user_text_start;
-	utext_hi = (uintptr_t)_ulmk_user_text_end;
-
-	if (prs == 0u) {
-		uint32_t prs0_cpr = (1u << ULMK_ARCH_MPU_CPR_KERNEL);
-
-		if (utext_hi > utext_lo)
-			prs0_cpr |= (1u << ULMK_ARCH_MPU_CPR_USER);
-
-		mpu_write_enables(0u,
-				  (1u << ULMK_ARCH_MPU_NUM_DPR) - 1u,
-				  (1u << ULMK_ARCH_MPU_NUM_DPR) - 1u,
-				  prs0_cpr);
-		g_mpu_prs     = 0u;
-		g_mpu_regions = NULL;
-		g_mpu_count   = 0u;
-		g_mpu_live    = 0u;
-		return;
-	}
-
-	max_dyn = (uint8_t)(ULMK_ARCH_MPU_NUM_DPR - ULMK_ARCH_MPU_USER_DPR_BASE);
-	if (!regions)
-		count = 0u;
-	eff = mpu_dyn_count(regions, count, max_dyn);
-
-	/*
-	 * Unchanged domain (typical self-yield / same thread): no CSFR writes.
-	 */
-	if (prs == g_mpu_prs && regions == g_mpu_regions && count == g_mpu_count)
-		return;
-
-	/*
-	 * IPC hot path: both sides stack-only → static URAM already covers
-	 * stacks; no dynamic slots live and none requested.
-	 */
-	if (prs == g_mpu_prs && eff == 0u && g_mpu_live == 0u) {
-		g_mpu_regions = regions;
-		g_mpu_count   = count;
-		return;
-	}
-
-	mpu_prs1_static_enables(&dpre, &dpwe, &cpxe);
-
-	/*
-	 * Fast append: mem_map grew the table by one non-STACK region and the
-	 * prior layout had no STACK holes (dense slot == region index).
-	 */
-	if (prs == g_mpu_prs && regions == g_mpu_regions &&
-	    count == (uint8_t)(g_mpu_count + 1u) && count > 0u &&
-	    regions[count - 1u].type != ULMK_REGION_STACK &&
-	    mpu_dyn_count(regions, (uint8_t)(count - 1u), max_dyn) ==
-		    (uint8_t)(count - 1u)) {
-		mpu_write_user_slot((uint8_t)(count - 1u), &regions[count - 1u],
-				    &dpre, &dpwe);
-		for (i = 0u; i < (uint8_t)(count - 1u); i++) {
-			uint8_t d_slot =
-				(uint8_t)(ULMK_ARCH_MPU_USER_DPR_BASE + i);
-
-			if (regions[i].perms & ULMK_PERM_READ)
-				dpre |= (1u << d_slot);
-			if (regions[i].perms & ULMK_PERM_WRITE)
-				dpwe |= (1u << d_slot);
-		}
-		mpu_write_enables(prs, dpre, dpwe, cpxe);
-		g_mpu_count = count;
-		g_mpu_live  = count;
-		return;
-	}
-
-	prog = 0u;
-	for (i = 0u; i < count && prog < max_dyn; i++) {
-		if (regions[i].type == ULMK_REGION_STACK)
-			continue;
-		mpu_write_user_slot(prog, &regions[i], &dpre, &dpwe);
-		prog++;
-	}
-
-	/* Clear only previously live dynamic slots that are no longer used. */
-	for (i = prog; i < g_mpu_live; i++) {
-		uint8_t d_slot = (uint8_t)(ULMK_ARCH_MPU_USER_DPR_BASE + i);
-
-		if (d_slot < ULMK_ARCH_MPU_NUM_DPR)
-			mpu_write_dpr(d_slot, 0u, 0u);
-	}
-
-	mpu_write_enables(prs, dpre, dpwe, cpxe);
-
-	g_mpu_prs     = prs;
-	g_mpu_regions = regions;
-	g_mpu_count   = count;
-	g_mpu_live    = prog;
-}
-
 void ulmk_arch_mpu_configure(uint8_t prs, const ulmk_arch_region_t *regions,
 			   uint8_t count)
 {
-	/* Force a full reprogram (ignore identity cache). */
-	g_mpu_regions = NULL;
-	g_mpu_count   = 0xFFu;
-	mpu_program_regions(prs, regions, count);
+	(void)prs;
+	(void)regions;
+	(void)count;
 }
 
 void ulmk_arch_mpu_switch(const ulmk_arch_region_t *regions, uint8_t count,
 			uint8_t prs)
 {
-	mpu_program_regions(prs, regions, count);
+#if ULMK_ARCH_MPU_LAZY
+	struct mpu_cpu *c = mpu_cpu();
+	uint32_t dpre;
+	uint32_t dpwe;
+	uint8_t  i;
+
+	/*
+	 * Kernel threads run at PRS 0 and never see the PRS 1 set: leave it,
+	 * but forget the owner so the next user thread (even the same one) is
+	 * rebuilt against its current areas.
+	 */
+	if (prs != ULMK_ARCH_PRS_USER) {
+		c->pinned = NULL;
+		return;
+	}
+	if (regions && regions == c->pinned)
+		return;
+
+	dpre = g_mpu_user_dpre;
+	dpwe = g_mpu_user_dpwe;
+	/* The kernel pins one region per thread: its stack. */
+	if (regions && count && regions[0].size) {
+		mpu_write_dpr(ULMK_ARCH_MPU_PIN_DPR, (uint32_t)regions[0].base,
+			      mpu_range_upper(regions[0].base +
+					      regions[0].size));
+		mpu_perm_bits(regions[0].perms, ULMK_ARCH_MPU_PIN_DPR,
+			      &dpre, &dpwe);
+	}
+	for (i = 0u; i < MPU_DYN_COUNT; i++)
+		c->win[i] = 0u;
+	c->next   = 0u;
+	c->pinned = regions;
+	c->dpre   = dpre;
+	c->dpwe   = dpwe;
+	mpu_write_enables(ULMK_ARCH_PRS_USER, dpre, dpwe, g_mpu_user_cpxe);
+#else
+	(void)regions;
+	(void)count;
+	(void)prs;
+#endif
+}
+
+void ulmk_arch_mpu_flush(void)
+{
+#if ULMK_ARCH_MPU_LAZY
+	struct mpu_cpu *c = mpu_cpu();
+	uint8_t i;
+
+	for (i = 0u; i < MPU_DYN_COUNT; i++)
+		c->win[i] = 0u;
+	c->dpre &= ~MPU_DYN_MASK;
+	c->dpwe &= ~MPU_DYN_MASK;
+	mpu_write_enables(ULMK_ARCH_PRS_USER, c->dpre, c->dpwe,
+			  g_mpu_user_cpxe);
+#endif
+}
+
+bool ulmk_arch_mpu_load(const ulmk_arch_region_t *win)
+{
+#if ULMK_ARCH_MPU_LAZY
+	struct mpu_cpu *c = mpu_cpu();
+	uint8_t i;
+	uint8_t slot;
+
+	if (win->size < 8u || ((win->base | win->size) & 7u))
+		return false;
+
+	/* The window is live yet the access faulted: a real violation. */
+	for (i = 0u; i < MPU_DYN_COUNT; i++) {
+		if (c->win[i] == win->base)
+			return false;
+	}
+
+	i = c->next;
+	c->next = (uint8_t)(i + 1u == MPU_DYN_COUNT ? 0u : i + 1u);
+	slot = (uint8_t)(MPU_DYN_BASE + i);
+
+	mpu_write_dpr(slot, (uint32_t)win->base,
+		      mpu_range_upper(win->base + win->size));
+	mpu_perm_bits(win->perms, slot, &c->dpre, &c->dpwe);
+	c->win[i] = win->base;
+	mpu_write_enables(ULMK_ARCH_PRS_USER, c->dpre, c->dpwe,
+			  g_mpu_user_cpxe);
+	return true;
+#else
+	(void)win;
+	return false;
+#endif
 }
 
 bool ulmk_arch_mpu_addr_permitted(uintptr_t addr, size_t size, uint32_t perms)
 {
-	uint32_t dpre;
-	uint32_t dpwe;
-	uintptr_t end = addr + size;
-	uint32_t  dpr_lo;
-	uint32_t  dpr_hi;
-	uint32_t  i;
-
-	/* Read PRS 1 enable bits */
-	__asm__ volatile("mfcr %0, 0xE014" : "=d"(dpre));
-	__asm__ volatile("mfcr %0, 0xE024" : "=d"(dpwe));
-
-	for (i = 0u; i < ULMK_ARCH_NUM_DPR; i++) {
-		if (!(dpre & (1u << i)))
-			continue;
-
-		/* Read DPR_L and DPR_U by using the MFCR switch */
-		/* We only check user slots (6-17); static slots are kernel-only */
-		if (i < ULMK_ARCH_MPU_USER_DPR_BASE && i != ULMK_ARCH_MPU_MMIO_DPR)
-			continue;
-
-		__asm__ volatile("" ::: "memory");
-		/*
-		 * We cannot MFCR with a variable.  For addr_permitted we use
-		 * a simplified heuristic: if any user DPR is enabled and covers
-		 * the address. Since full readback would require another 18-case
-		 * switch, we return true conservatively when called from kernel
-		 * (syscall path) and use this only as a PERIPH range hint.
-		 */
-		(void)dpr_lo;
-		(void)dpr_hi;
-		(void)end;
-		(void)dpwe;
-		(void)perms;
-		return true;
-	}
-
-	return false;
+	(void)addr;
+	(void)size;
+	(void)perms;
+	return true;
 }
 
 /* =========================================================================
@@ -1318,6 +1282,52 @@ uint32_t trap_interrupted_psw(void)
 	}
 
 	return 0u;
+}
+
+#define TIN1_MPR	2u
+#define TIN1_MPW	3u
+
+/*
+ * Lazy window fault-in for a class 1 MPR/MPW, called from the class 1 vector
+ * with the lower context saved: returning true resumes the faulting
+ * instruction through RFE.  The chain is fixed by that vector — this call's
+ * frame, then the SVLCX lower context, then the trap's upper context holding
+ * the faulting PSW — so no heuristic walk is needed.  DEADD holds the data
+ * address only while DSTR is non-zero, and DSTR is sticky until cleared.
+ */
+bool ulmk_arch_trap_mem_fault(uint32_t tin)
+{
+#if ULMK_ARCH_MPU_LAZY
+	uint32_t  pcxi;
+	uint32_t *frame;
+	uint32_t  psw;
+	uint32_t  dstr;
+	uint32_t  addr;
+
+	__asm__ volatile("mfcr %0, 0xFE00" : "=d"(pcxi));
+
+	if ((tin != TIN1_MPR && tin != TIN1_MPW) || ulmk_irq_in_attach())
+		return false;
+
+	frame = pcxi_to_csa(pcxi);
+	frame = pcxi_to_csa(frame[0]);
+	frame = pcxi_to_csa(frame[0]);
+	psw   = frame[1];
+	if (((psw >> 9) & 1u) || ((psw >> 10) & 3u) == 2u)
+		return false;
+
+	__asm__ volatile("mfcr %0, 0x9010" : "=d"(dstr));
+	if (!dstr)
+		return false;
+	__asm__ volatile("mfcr %0, 0x901C" : "=d"(addr));
+	__asm__ volatile("mtcr 0x9010, %0\n\tisync" :: "d"(0u) : "memory");
+
+	return ulmk_kern_mem_fault((uintptr_t)addr, tin == TIN1_MPR ?
+				   ULMK_PERM_READ : ULMK_PERM_WRITE);
+#else
+	(void)tin;
+	return false;
+#endif
 }
 
 /*

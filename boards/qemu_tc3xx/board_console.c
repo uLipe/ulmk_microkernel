@@ -21,6 +21,8 @@
 #define CONSOLE_MSG_PUTC	1u
 #define CONSOLE_MSG_WRITE	2u
 #define CONSOLE_WRITE_MAX	256u
+/* Bytes travel inline: the server never dereferences a client pointer. */
+#define CONSOLE_CHUNK_MAX	((ULMK_MSG_WORDS - 1u) * 4u)
 #define CONSOLE_FMT_BUF		160u
 
 static ulmk_ep_t g_ep __attribute__((section(".user_bss")));
@@ -53,8 +55,10 @@ static void console_server(void *arg)
 		if (msg.label == CONSOLE_MSG_PUTC) {
 			console_putc_hw((char)(uint8_t)msg.words[0]);
 		} else if (msg.label == CONSOLE_MSG_WRITE) {
-			buf = (const char *)(uintptr_t)msg.words[0];
-			len = msg.words[1];
+			buf = (const char *)&msg.words[1];
+			len = msg.words[0];
+			if (len > CONSOLE_CHUNK_MAX)
+				len = CONSOLE_CHUNK_MAX;
 			if (buf && len > 0u) {
 				if (len > CONSOLE_WRITE_MAX)
 					len = CONSOLE_WRITE_MAX;
@@ -69,15 +73,24 @@ static void console_server(void *arg)
 static void console_write(const char *buf, uint32_t len)
 {
 	ulmk_msg_t msg;
+	uint8_t *dst = (uint8_t *)&msg.words[1];
+	uint32_t n;
+	uint32_t i;
 
 	if (!buf || len == 0u || g_ep == ULMK_EP_INVALID)
 		return;
 	if (len > CONSOLE_WRITE_MAX)
 		len = CONSOLE_WRITE_MAX;
-	msg.label    = CONSOLE_MSG_WRITE;
-	msg.words[0] = (uint32_t)(uintptr_t)buf;
-	msg.words[1] = len;
-	(void)ulmk_ep_call(g_ep, &msg);
+	while (len > 0u) {
+		n = len < CONSOLE_CHUNK_MAX ? len : CONSOLE_CHUNK_MAX;
+		for (i = 0u; i < n; i++)
+			dst[i] = (uint8_t)buf[i];
+		msg.label    = CONSOLE_MSG_WRITE;
+		msg.words[0] = n;
+		(void)ulmk_ep_call(g_ep, &msg);
+		buf += n;
+		len -= n;
+	}
 }
 
 void board_console_putc(char c)

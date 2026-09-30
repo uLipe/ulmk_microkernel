@@ -212,6 +212,49 @@ static void test_aligned_alloc(void)
 	ulmk_heap_free(p);
 }
 
+/*
+ * Power-of-two MPUs pin a thread stack as one naturally aligned window, so
+ * stacks come from aligned_alloc(size, size).  The carve must keep the block
+ * chain intact: the tail past the aligned payload goes back to the pool and
+ * freeing everything restores the whole heap.
+ */
+static void test_aligned_alloc_stack_pattern(void)
+{
+	size_t free0;
+	void  *s[4];
+	void  *small[4];
+	int    i;
+	int    ok = 1;
+
+	printf("test_aligned_alloc_stack_pattern\n");
+	reset_pool();
+	free0 = ulmk_heap_free_bytes();
+
+	for (i = 0; i < 4; i++) {
+		small[i] = ulmk_heap_alloc(64u + (size_t)i * 64u);
+		s[i] = ulmk_heap_aligned_alloc(1024u, 1024u);
+		if (!s[i] || ((uintptr_t)s[i] & 1023u))
+			ok = 0;
+	}
+	CHECK(ok, "four 1 KiB stacks, each 1 KiB aligned");
+	if (!ok)
+		return;
+
+	for (i = 0; i < 4; i++)
+		memset(s[i], 0xA5, 1024u);
+	for (i = 0; i < 4; i++) {
+		ulmk_heap_free(s[i]);
+		ulmk_heap_free(small[i]);
+	}
+	CHECK(ulmk_heap_free_bytes() == free0, "all bytes back after free");
+
+	/* Good-fit search rounds up a sub-class; 3/4 of the pool still needs
+	 * the carved pieces merged back. */
+	s[0] = ulmk_heap_alloc(free0 / 4u * 3u);
+	CHECK(s[0] != NULL, "pool coalesced back into one block");
+	ulmk_heap_free(s[0]);
+}
+
 int main(void)
 {
 	printf("=== mem_unit: TLSF allocator tests ===\n");
@@ -225,6 +268,7 @@ int main(void)
 	test_multiple_sizes();
 	test_alignment_varied_sizes();
 	test_aligned_alloc();
+	test_aligned_alloc_stack_pattern();
 
 	printf("\n=== Results: %d passed, %d failed ===\n", g_pass, g_fail);
 	return (g_fail == 0) ? 0 : 1;

@@ -38,13 +38,6 @@ uint32_t ulmk_kern_mem_unmap(uint32_t addr, uint32_t size);
 uint32_t ulmk_kern_mem_grant(uint32_t addr, uint32_t size,
 			   uint32_t target_tid, uint32_t perms);
 uint32_t ulmk_kern_mem_revoke(uint32_t addr, uint32_t target_tid);
-/* Per-thread heap (slabAO model) */
-uint32_t ulmk_kern_heap_extend(uint32_t size);
-uint32_t ulmk_kern_get_thread_heap(uint32_t info_ptr);
-/* Kernel-internal heap helpers (not exposed as syscalls) */
-uint32_t ulmk_kern_heap_alloc(uint32_t size);
-uint32_t ulmk_kern_heap_free(uint32_t ptr);
-uint32_t ulmk_kern_heap_aligned_alloc(uint32_t align, uint32_t size);
 
 /* Scheduling */
 uint32_t ulmk_kern_yield(void);

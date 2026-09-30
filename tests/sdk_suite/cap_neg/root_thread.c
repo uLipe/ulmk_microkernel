@@ -70,7 +70,6 @@ static void user_probe(void *arg)
 	a.priority   = 200u;
 	a.stack_size = 512u;
 	a.privilege  = ULMK_PRIV_USER;
-	a.heap_size  = 0u;
 	tid = ulmk_thread_create(&a);
 	g_user_spawn_eperm = tid_is_eperm(tid);
 	g_user_kill_eperm = is_eperm(ulmk_thread_kill(g_victim));
@@ -79,7 +78,7 @@ static void user_probe(void *arg)
 	g_user_irq_eperm = is_eperm(ulmk_irq_bind(5u, n, 0u));
 	if (n != ULMK_NOTIF_INVALID)
 		ulmk_notif_destroy(n);
-	g_user_heap_eperm = is_eperm(ulmk_heap_extend(64u));
+	g_user_heap_eperm = (ulmk_malloc(64u) == NULL);
 	p = ulmk_mem_map((void *)(uintptr_t)ULMK_BOARD_PERIPH_BASE, 64u,
 			 ULMK_PERM_READ | ULMK_PERM_WRITE, ULMK_MMAP_PERIPH);
 	g_user_mmap_eperm = (p == NULL);
@@ -102,7 +101,6 @@ static void driver_probe(void *arg)
 	a.priority   = 200u;
 	a.stack_size = 512u;
 	a.privilege  = ULMK_PRIV_USER;
-	a.heap_size  = 0u;
 	tid = ulmk_thread_create(&a);
 	g_drv_spawn_eperm = tid_is_eperm(tid);
 	g_drv_kill_eperm = is_eperm(ulmk_thread_kill(g_victim));
@@ -130,11 +128,12 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	g_pass = 0;
 	g_fail = 0;
 	g_done = ulmk_notif_create();
-	g_victim = sdk_spawn_priv("victim", idle_victim, NULL, 200u, 1024u, 0u,
+	g_victim = sdk_spawn_priv("victim", idle_victim, NULL, 200u, 1024u,
+				  ULMK_CAP_NONE,
 				  ULMK_PRIV_USER);
 	CHECK("victim", g_victim != ULMK_TID_INVALID);
 
-	sdk_spawn_priv("uprobe", user_probe, NULL, 10u, 1024u, 512u,
+	sdk_spawn_priv("uprobe", user_probe, NULL, 10u, 1024u, ULMK_CAP_NONE,
 		       ULMK_PRIV_USER);
 	bits = 0u;
 	ulmk_notif_wait(g_done, 0x1u, &bits);
@@ -146,8 +145,8 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	CHECK("u_mmap", g_user_mmap_eperm);
 	CHECK("u_cap", g_user_cap_eperm);
 
-	sdk_spawn_priv("dprobe", driver_probe, NULL, 10u, 1024u, 0u,
-		       ULMK_PRIV_DRIVER);
+	sdk_spawn_priv("dprobe", driver_probe, NULL, 10u, 1024u,
+		       ULMK_CAP_MAP_PERIPH | ULMK_CAP_IRQ, ULMK_PRIV_DRIVER);
 	bits = 0u;
 	ulmk_notif_wait(g_done, 0x2u, &bits);
 	CHECK("d_spawn", g_drv_spawn_eperm);
@@ -160,6 +159,10 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	      sdk_spawn_priv("ok", idle_victim, NULL, 200u, 1024u, 0u,
 			     ULMK_PRIV_USER) != ULMK_TID_INVALID);
 	CHECK("r_cap", ulmk_cap_grant(g_victim, ULMK_CAP_SPAWN) == ULMK_OK);
+	/* Root runs as DRIVER: a KERNEL child would escape its privilege. */
+	CHECK("r_priv_esc",
+	      sdk_spawn_priv("k", idle_victim, NULL, 200u, 1024u, 0u,
+			     ULMK_PRIV_KERNEL) == ULMK_TID_INVALID);
 
 	sdk_puts("cap_neg: pass=");
 	sdk_put_u32((uint32_t)g_pass);

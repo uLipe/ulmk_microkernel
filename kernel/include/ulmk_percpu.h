@@ -26,6 +26,8 @@
 #endif
 
 struct ulmk_thread;
+struct ulmk_area;
+struct ulmk_xcall;
 
 struct ulmk_percpu {
 	struct ulmk_thread *current;
@@ -42,9 +44,19 @@ struct ulmk_percpu {
 	bool                in_irq_attach;
 	struct ulmk_thread *irq_attach_owner;
 	uint8_t             irq_attach_srpn;
+	/*
+	 * Backed areas dropped under the area lock.  Their blocks are freed
+	 * only once no CPU can still reach them through a live window.
+	 */
+	struct ulmk_area   *area_retired;
 #if ULMK_CONFIG_ENABLE_SMP
 	/* Bitmask of remote CPUs that need a resched IPI (see sched). */
 	uint32_t            ipi_pending;
+	/* Remote CPUs whose running thread lost an area (see mem.c). */
+	uint32_t            mpu_shootdown;
+	/* Pending cross-CPU request; see kernel/sched/xcall.c. */
+	ulmk_spinlock_t     xcall_lock;
+	struct ulmk_xcall  *xcall;
 #endif
 };
 

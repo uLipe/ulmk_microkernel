@@ -86,6 +86,12 @@ def main():
 
     flags = parse_flags(chip_memory)
 
+    # Optional power-of-two MPU alignment knobs (linker/kernel/user_*.ld.in):
+    # ld evaluates both arms of ?:, so an unset knob must still be a symbol.
+    for knob in ("ULMK_USER_TEXT_ALIGN", "ULMK_USER_RAM_ALIGN"):
+        if not re.search(rf"^\s*{knob}\s*=", chip_memory, re.MULTILINE):
+            out.append(f"{knob} = 0;\n")
+
     out.append("\nSECTIONS {\n")
 
     # Optional chip app/header fragment before vectors (ESP32 app_desc, etc.)
@@ -123,7 +129,12 @@ def main():
                                               "kernel_text.ld.in")))
 
     # 4c. Userspace text lower bound (per-component sections follow)
-    out.append("    _ulmk_user_text_start = .;\n")
+    out.append(
+        "    .user_text_start : {\n"
+        "        . = ALIGN(ULMK_USER_TEXT_ALIGN ? "
+        "ULMK_USER_TEXT_ALIGN : 1);\n"
+        "        _ulmk_user_text_start = .;\n"
+        "    } > KERNEL_FLASH\n")
 
     # 4d. Per-component text snippets — one MPU-aligned section per component,
     #     selecting exclusively from libulmk_comp_<name>.a

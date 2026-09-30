@@ -2,7 +2,8 @@
 /*
  * Global kernel spinlocks for shared pools (ep/notif/thread/mem/irq).
  *
- * Lock order (never invert): thread → ipc (ep/notif) → rq → irq → timer → mem
+ * Lock order (never invert):
+ *   thread → ipc (ep/notif) → rq → irq → timer → area → mem
  * RQ lock is internal to bitmap_rt (enqueue/dequeue/pick/peek).
  *
  * Do NOT call ulmk_timeout_arm/disarm (timer lock) while holding ipc.
@@ -20,6 +21,11 @@ extern ulmk_spinlock_t g_ulmk_lock_thread;
 extern ulmk_spinlock_t g_ulmk_lock_ipc;	/* ep + notif (shared for recv_or_notif) */
 extern ulmk_spinlock_t g_ulmk_lock_irq;
 extern ulmk_spinlock_t g_ulmk_lock_timer;
+/*
+ * Per-thread area sets.  The fault handler resolves and loads a window
+ * under it, so a revoke cannot slip between the lookup and the load.
+ */
+extern ulmk_spinlock_t g_ulmk_lock_area;
 extern ulmk_spinlock_t g_ulmk_lock_mem;
 
 #endif /* UL_KLOCK_H */

@@ -24,12 +24,10 @@
 
 static const ulmk_sched_class_t * UL_KERNEL_BSS sched_class;
 
-static inline __attribute__((always_inline))
-uint8_t sched_thread_prs(const ulmk_thread_t *t)
+void ulmk_sched_mpu_switch(const ulmk_thread_t *th)
 {
-	if (t && t->privilege == ULMK_PRIV_KERNEL)
-		return 0u;
-	return 1u;
+	ulmk_arch_mpu_switch(&th->stack_region, th->stack_region.size ? 1u : 0u,
+			     th->privilege == ULMK_PRIV_KERNEL ? 0u : 1u);
 }
 
 static inline __attribute__((always_inline))
@@ -93,8 +91,7 @@ static void sched_switch_to(ulmk_thread_t *prev, ulmk_thread_t *next)
 		return;
 	}
 
-	ulmk_arch_mpu_switch(next->regions, next->region_count,
-			     sched_thread_prs(next));
+	ulmk_sched_mpu_switch(next);
 
 	pc->current = next;
 	next->state = UL_THREAD_STATE_RUNNING;
@@ -154,8 +151,7 @@ void ulmk_sched_start(void)
 	 * context races with STM0 on QEMU TriCore and can hang before the
 	 * first root instruction.  Arm on the first trap/syscall instead.
 	 */
-	ulmk_arch_mpu_switch(first->regions, first->region_count,
-			     sched_thread_prs(first));
+	ulmk_sched_mpu_switch(first);
 	ulmk_arch_ctx_switch(&pc->startup_ctx, &first->ctx);
 }
 
@@ -271,8 +267,7 @@ void ulmk_sched_trap_dispatch(bool from_isr)
 
 			pc->current = next;
 			next->state = UL_THREAD_STATE_RUNNING;
-			ulmk_arch_mpu_switch(next->regions, next->region_count,
-					     sched_thread_prs(next));
+			ulmk_sched_mpu_switch(next);
 			ulmk_arch_sched_switch(&cur->ctx, &next->ctx,
 					       ULMK_SCHED_SWITCH_PREEMPT_ISR);
 			return;

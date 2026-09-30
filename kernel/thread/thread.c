@@ -12,6 +12,7 @@
 #include <ulmk/config.h>
 #include <kernel/include/ulmk_thread_internal.h>
 #include <kernel/include/ulmk_sched.h>
+#include <kernel/include/ulmk_xcall.h>
 #include <kernel/include/ulmk_percpu.h>
 #include <kernel/include/ulmk_mem_internal.h>
 #include <kernel/include/ulmk_ep_internal.h>
@@ -75,10 +76,7 @@ int ulmk_thread_init(ulmk_thread_t *th, const ulmk_thread_attr_t *attr, void *st
 
 	th->stack_base  = (uint8_t *)stack;
 	th->stack_size  = attr->stack_size;
-	th->slab_base   = NULL;
-	th->slab_size   = 0u;
-	th->heap_base   = 0u;
-	th->heap_size   = 0u;
+	th->stack_alloc = NULL;
 	th->priority    = attr->priority;
 	th->cpu         = attr->cpu;
 	th->saved_prio  = attr->priority;
@@ -103,26 +101,16 @@ int ulmk_thread_init(ulmk_thread_t *th, const ulmk_thread_attr_t *attr, void *st
 	th->notif_bits_outptr  = NULL;
 	th->rn_result_outptr   = NULL;
 	th->wcet_out          = NULL;
-	th->region_count      = 0u;
 
 	th->cap_flags = (attr->privilege == ULMK_PRIV_KERNEL) ? ULMK_CAP_ALL : 0u;
-	/*
-	 * Drivers need MMIO + IRQ to bring up board servers.  Granting only
-	 * after create races with the first schedule of a higher-priority
-	 * driver thread; seed the minimum set at create time.
-	 */
-	if (attr->privilege == ULMK_PRIV_DRIVER)
-		th->cap_flags |= (uint8_t)(ULMK_CAP_MAP_PERIPH | ULMK_CAP_IRQ);
+	ulmk_area_set_init(&th->areas);
 
-	/*
-	 * Every non-kernel thread gets its stack as a default R+W MPU region.
-	 */
+	th->stack_region = (ulmk_arch_region_t){ 0 };
 	if (attr->privilege != ULMK_PRIV_KERNEL) {
-		th->regions[0].base  = (uintptr_t)stack;
-		th->regions[0].size  = attr->stack_size;
-		th->regions[0].perms = ULMK_PERM_READ | ULMK_PERM_WRITE;
-		th->regions[0].type  = ULMK_REGION_STACK;
-		th->region_count     = 1u;
+		th->stack_region.base  = (uintptr_t)stack;
+		th->stack_region.size  = attr->stack_size;
+		th->stack_region.perms = ULMK_PERM_READ | ULMK_PERM_WRITE;
+		th->stack_region.type  = ULMK_REGION_STACK;
 	}
 
 #if ULMK_CONFIG_ENABLE_SMP
@@ -207,10 +195,9 @@ void ulmk_thread_set_state(ulmk_thread_t *th, uint8_t state)
 }
 
 /*
- * Unlink a TCB from the global registry list and free its heap memory.
- * Stack is freed first (it was allocated from the heap), then the TCB.
- * Called only for heap-allocated threads (dynamic TCBs).
- * Static TCBs (idle, root) must never be passed to this function.
+ * Unlink a TCB from the registry and drop its areas.  Aliases derived from
+ * them elsewhere survive (exit does not cascade); the backing goes with the
+ * last one.  Static threads keep their linker-reserved TCB and stack.
  */
 void ulmk_thread_free(ulmk_thread_t *th)
 {
@@ -221,15 +208,12 @@ void ulmk_thread_free(ulmk_thread_t *th)
 		sys_dnode_init(&th->reg_node);
 	}
 
-	/*
-	 * Static threads (idle, root) have slab_base == NULL; their TCB and
-	 * stack live in linker-reserved sections and must not be passed to
-	 * the heap allocator.
-	 */
-	if (!th->slab_base)
+	ulmk_mem_thread_release(th);
+
+	if (!th->stack_alloc)
 		return;
 
-	ulmk_heap_free(th->slab_base);
+	ulmk_heap_free(th->stack_alloc);
 	ulmk_heap_free(th);
 }
 
@@ -281,26 +265,43 @@ uint32_t ulmk_kern_exit(void)
 }
 
 /*
- * spawn — allocate TCB and slabAO (stack + optional heap) from user_pool,
- * initialise, and enqueue.  Returns new TID or a negative error code.
- *
- * The slabAO is a single contiguous block: [stack | heap].
- * A single DPR covers the entire slab so the thread's heap is accessible
- * via the same MPU region as its stack, with no extra DPR entries.
- * The TCB is a separate allocation to prevent userspace from reaching it.
+ * The stack is one pinned window, so it must be encodable as a single
+ * region: a naturally aligned power of two where the MPU demands it.
+ */
+static void *stack_alloc(size_t *size)
+{
+#if ULMK_ARCH_MPU_WIN_POW2
+	size_t s = ULMK_ARCH_MPU_WIN_MIN;
+
+	while (s < *size)
+		s <<= 1;
+	*size = s;
+	return ulmk_heap_aligned_alloc(s, s);
+#else
+	*size = (*size + ULMK_ARCH_REGION_ALIGN - 1u) &
+		~(size_t)(ULMK_ARCH_REGION_ALIGN - 1u);
+	return ulmk_heap_alloc(*size);
+#endif
+}
+
+/*
+ * spawn — allocate TCB and stack from the kernel heap, derive caps and
+ * areas from the creator, and enqueue.  Returns the new TID or
+ * ULMK_TID_INVALID.  The TCB is its own block so no user window covers it.
  */
 uint32_t ulmk_kern_thread_spawn(uint32_t attr_ptr)
 {
 	const ulmk_thread_attr_t *uattr =
 		(const ulmk_thread_attr_t *)(uintptr_t)attr_ptr;
+	ulmk_thread_t *cur = ulmk_sched_current();
 	ulmk_thread_attr_t attr;
 	ulmk_thread_t *th;
-	void          *slab;
-	size_t         slab_size;
-	size_t         heap_size;
+	void          *stack;
 	int            ret;
 
-	if (!uattr || !uattr->entry || uattr->stack_size == 0)
+	if (!cur || !uattr || !uattr->entry || uattr->stack_size == 0)
+		return (uint32_t)ULMK_TID_INVALID;
+	if (uattr->privilege > cur->privilege)
 		return (uint32_t)ULMK_TID_INVALID;
 
 	/*
@@ -320,39 +321,34 @@ uint32_t ulmk_kern_thread_spawn(uint32_t attr_ptr)
 #endif
 	attr.stack_size += ULMK_ARCH_KSTACK_SIZE;
 
-	heap_size = attr.heap_size;
-	slab_size = attr.stack_size + heap_size;
-
 	th = (ulmk_thread_t *)ulmk_heap_alloc(sizeof(ulmk_thread_t));
 	if (!th)
 		return (uint32_t)ULMK_TID_INVALID;
 
-	slab = ulmk_heap_alloc(slab_size);
-	if (!slab) {
+	stack = stack_alloc(&attr.stack_size);
+	if (!stack) {
 		ulmk_heap_free(th);
 		return (uint32_t)ULMK_TID_INVALID;
 	}
 
-	ret = ulmk_thread_init(th, &attr, slab);
+	ret = ulmk_thread_init(th, &attr, stack);
 	if (ret != ULMK_OK) {
-		ulmk_heap_free(slab);
+		ulmk_heap_free(stack);
 		ulmk_heap_free(th);
 		return (uint32_t)ULMK_TID_INVALID;
 	}
+	th->stack_alloc = stack;
 
-	th->slab_base = slab;
-	th->slab_size = slab_size;
-	th->heap_base = (uintptr_t)slab + attr.stack_size;
-	th->heap_size = heap_size;
-
-	/*
-	 * Extend the single DPR to cover the full slabAO (stack + heap)
-	 * when the thread has a heap.  ulmk_thread_init already set
-	 * regions[0] to cover just the stack.
-	 */
-	if (heap_size > 0u && attr.privilege != ULMK_PRIV_KERNEL) {
-		th->regions[0].base = (uintptr_t)slab;
-		th->regions[0].size = slab_size;
+	if (attr.caps == ULMK_CAP_INHERIT) {
+		th->cap_flags = cur->cap_flags;
+		ret = ulmk_mem_thread_inherit(th, cur);
+	} else {
+		th->cap_flags = cur->cap_flags & (uint8_t)attr.caps;
+	}
+	if (ret != ULMK_OK) {
+		ulmk_arch_ctx_free(&th->ctx);
+		ulmk_thread_free(th);
+		return (uint32_t)ULMK_TID_INVALID;
 	}
 
 	ulmk_sched_enqueue(th);
@@ -363,22 +359,7 @@ uint32_t ulmk_kern_thread_spawn(uint32_t attr_ptr)
 #endif
 }
 
-uint32_t ulmk_kern_get_thread_heap(uint32_t info_ptr)
-{
-	ulmk_thread_t    *cur  = ulmk_sched_current();
-	ulmk_heap_info_t *info = (ulmk_heap_info_t *)(uintptr_t)info_ptr;
-
-	if (!cur || !info)
-		return (uint32_t)(int32_t)ULMK_EINVAL;
-	if (cur->heap_size == 0u)
-		return (uint32_t)(int32_t)ULMK_EPERM;
-
-	info->base = cur->heap_base;
-	info->size = cur->heap_size;
-	return (uint32_t)ULMK_OK;
-}
-
-uint32_t ulmk_kern_thread_kill(uint32_t tid)
+static uint32_t thread_kill_local(uint32_t tid)
 {
 	ulmk_thread_t *th = ulmk_thread_by_tid((ulmk_tid_t)tid);
 	ulmk_thread_t *peer;
@@ -439,6 +420,29 @@ uint32_t ulmk_kern_thread_kill(uint32_t tid)
 	}
 
 	return 0;
+}
+
+#if ULMK_CONFIG_ENABLE_SMP
+static uint32_t thread_kill_xcall(void *arg)
+{
+	return thread_kill_local((uint32_t)(uintptr_t)arg);
+}
+#endif
+
+/*
+ * A thread only ever runs on its own CPU, so it is killed there: from here
+ * it could be mid-instruction on that CPU while its TCB and areas go away.
+ */
+uint32_t ulmk_kern_thread_kill(uint32_t tid)
+{
+#if ULMK_CONFIG_ENABLE_SMP
+	ulmk_thread_t *th = ulmk_thread_by_tid((ulmk_tid_t)tid);
+
+	if (th && th->cpu != (uint8_t)ulmk_arch_cpu_id())
+		return ulmk_xcall(th->cpu, thread_kill_xcall,
+				  (void *)(uintptr_t)tid);
+#endif
+	return thread_kill_local(tid);
 }
 
 uint32_t ulmk_kern_thread_suspend(uint32_t tid)

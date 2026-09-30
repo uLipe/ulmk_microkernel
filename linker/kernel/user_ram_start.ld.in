@@ -9,9 +9,17 @@
  *
  * startup (kernel/init/init.c) copies [__ulmk_user_data_load ..) → RAM using
  * _ulmk_user_data_start / _ulmk_user_data_end.
+ *
+ * ULMK_USER_RAM_ALIGN (optional, chip memory.ld): MPUs that can only encode
+ * aligned power-of-two regions need the user RAM range to start on a boundary
+ * of the region that covers it; user_pool.ld.in rounds the end to one of its
+ * subregions.  Without it the start is only 8-byte aligned.
  */
 
-    _ulmk_user_ram_start = .;
+    .user_ram_start (NOLOAD) : {
+        . = ALIGN(ULMK_USER_RAM_ALIGN ? ULMK_USER_RAM_ALIGN : 1);
+        _ulmk_user_ram_start = .;
+    } > KERNEL_RAM
 
     __ulmk_user_data_load = LOADADDR(.user_data);
     .user_data : ALIGN(8) {

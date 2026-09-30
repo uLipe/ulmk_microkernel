@@ -70,6 +70,10 @@
 #define ULMK_ARCH_MAX_REGIONS	12
 #define ULMK_ARCH_REGION_ALIGN	32	/* MPU granule: 32 bytes minimum */
 
+/* Lazy windows: PMSAv7 regions are naturally aligned powers of two. */
+#define ULMK_ARCH_MPU_WIN_POW2	(!ULMK_ARCH_ARMV8M)
+#define ULMK_ARCH_MPU_WIN_MIN	32u
+
 /* Static MPU region assignment (dynamic per-thread regions follow). */
 #define ULMK_ARCH_MPU_KTEXT	0	/* kernel code (RX, priv only)     */
 #define ULMK_ARCH_MPU_KRAM	1	/* kernel data (RW, priv only)     */

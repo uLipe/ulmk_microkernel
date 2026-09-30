@@ -79,7 +79,8 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	page[0] = MAGIC_OWNER;
 	g_shared = page;
 
-	peer = sdk_spawn("peer", peer_entry, NULL, 10u, 1024u, 0u);
+	/* No inherited areas: the grant is the peer's only way in. */
+	peer = sdk_spawn("peer", peer_entry, NULL, 10u, 1024u, ULMK_CAP_NONE);
 	CHECK("peer", peer != ULMK_TID_INVALID);
 	rc = ulmk_mem_grant((void *)page, 256u, peer,
 			    ULMK_PERM_READ | ULMK_PERM_WRITE);

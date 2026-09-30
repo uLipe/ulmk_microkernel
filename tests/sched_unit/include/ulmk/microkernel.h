@@ -61,7 +61,7 @@ typedef struct {
 	uint8_t		 priority;
 	size_t		 stack_size;
 	ulmk_privilege_t	 privilege;
-	size_t		 heap_size;
+	uint32_t	 caps;
 	uint8_t		 cpu;
 } ulmk_thread_attr_t;
 

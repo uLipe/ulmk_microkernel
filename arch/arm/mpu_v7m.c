@@ -26,6 +26,7 @@
 #define RBAR_VALID	(1u << 4)
 
 #define RASR_ENABLE	(1u << 0)
+#define RASR_SRD_SHIFT	8u
 #define RASR_XN		(1u << 28)
 #define RASR_AP_RW_ANY	(0x3u << 24)
 #define RASR_AP_RO_ANY	(0x6u << 24)
@@ -78,6 +79,14 @@ static void region_disable(uint8_t slot)
 	REG32(ULMK_ARCH_MPU_RASR) = 0u;
 }
 
+static void region_write(uint8_t slot, uintptr_t rbase, uint32_t l,
+			 uint32_t attr)
+{
+	REG32(ULMK_ARCH_MPU_RNR)  = slot;
+	REG32(ULMK_ARCH_MPU_RBAR) = (uint32_t)rbase | RBAR_VALID | slot;
+	REG32(ULMK_ARCH_MPU_RASR) = RASR_ENABLE | ((l - 1u) << 1) | attr;
+}
+
 static void region_program(uint8_t slot, uintptr_t base, uintptr_t size,
 			   uint32_t attr)
 {
@@ -90,10 +99,74 @@ static void region_program(uint8_t slot, uintptr_t base, uintptr_t size,
 	}
 
 	l = log2_cover(base, size, &rbase);
+	region_write(slot, rbase, l, attr);
+}
 
-	REG32(ULMK_ARCH_MPU_RNR)  = slot;
-	REG32(ULMK_ARCH_MPU_RBAR) = (uint32_t)rbase | RBAR_VALID | slot;
-	REG32(ULMK_ARCH_MPU_RASR) = RASR_ENABLE | ((l - 1u) << 1) | attr;
+/*
+ * Exact encoding of [lo, hi): the covering power-of-two region with the
+ * subregions outside the range disabled.  Rounding outward instead would
+ * hand user mode whatever kernel memory shares the block, so a range that
+ * is not a whole number of subregions is refused; the chip linker input
+ * (ULMK_USER_*_ALIGN) is what makes the static user ranges representable.
+ */
+static bool region_exact(uint8_t slot, uintptr_t lo, uintptr_t hi,
+			 uint32_t attr)
+{
+	uintptr_t rbase;
+	uintptr_t sub;
+	uint32_t  l;
+	uint32_t  first;
+	uint32_t  last;
+	uint32_t  srd;
+
+	l = log2_cover(lo, hi - lo, &rbase);
+	if (rbase == lo && hi - lo == ((uintptr_t)1u << l)) {
+		region_write(slot, rbase, l, attr);
+		return true;
+	}
+	/* Subregions exist only for regions of 256 bytes and up. */
+	if (l < 8u)
+		return false;
+	sub = (uintptr_t)1u << (l - 3u);
+	if (((lo - rbase) & (sub - 1u)) || ((hi - rbase) & (sub - 1u)))
+		return false;
+	first = (uint32_t)((lo - rbase) / sub);
+	last  = (uint32_t)((hi - rbase) / sub);
+	srd   = 0xFFu & ~(((1u << last) - 1u) & ~((1u << first) - 1u));
+	region_write(slot, rbase, l, attr | (srd << RASR_SRD_SHIFT));
+	return true;
+}
+
+static void dump_hex(const char *tag, uint32_t v)
+{
+	static const char hex[] = "0123456789abcdef";
+	int i;
+
+	while (*tag)
+		ulmk_printk_char_out(*tag++);
+	for (i = 28; i >= 0; i -= 4)
+		ulmk_printk_char_out(hex[(v >> i) & 0xFu]);
+}
+
+static void dump_layout(uint8_t slot, uintptr_t lo, uintptr_t hi)
+{
+	dump_hex("MPU: static range not encodable slot=", slot);
+	dump_hex(" lo=", (uint32_t)lo);
+	dump_hex(" hi=", (uint32_t)hi);
+	ulmk_printk_char_out('\n');
+}
+
+static void static_range(uint8_t slot, uintptr_t lo, uintptr_t hi,
+			 uint32_t attr)
+{
+	if (hi <= lo) {
+		region_disable(slot);
+		return;
+	}
+	if (region_exact(slot, lo, hi, attr))
+		return;
+	dump_layout(slot, lo, hi);
+	ulmk_kern_trap_panic();
 }
 
 static void program_static_user(void)
@@ -101,29 +174,22 @@ static void program_static_user(void)
 	extern uint8_t _ulmk_user_text_start[];
 	extern uint8_t _ulmk_user_text_end[];
 	extern uint8_t _ulmk_user_ram_start[];
-	extern uint8_t _ulmk_user_pool_end[];
+	extern uint8_t _ulmk_user_pool_start[];
 	extern uintptr_t _ulmk_mem_periph_base[];
 	extern uintptr_t _ulmk_mem_periph_end[];
 
 	uintptr_t utext_lo = (uintptr_t)_ulmk_user_text_start;
 	uintptr_t utext_hi = (uintptr_t)_ulmk_user_text_end;
 	uintptr_t uram_lo  = (uintptr_t)_ulmk_user_ram_start;
-	uintptr_t uram_hi  = (uintptr_t)_ulmk_user_pool_end;
+	uintptr_t uram_hi  = (uintptr_t)_ulmk_user_pool_start;
 	uintptr_t mmio_lo  = (uintptr_t)_ulmk_mem_periph_base;
 	uintptr_t mmio_hi  = (uintptr_t)_ulmk_mem_periph_end;
 
-	if (utext_hi > utext_lo)
-		region_program(ULMK_ARCH_MPU_UTEXT, utext_lo, utext_hi - utext_lo,
-			       RASR_AP_RO_ANY | RASR_MEM_NORMAL);
-	else
-		region_disable(ULMK_ARCH_MPU_UTEXT);
-
-	/* Shared user data/bss + heap pool: RW, no-execute, all user threads. */
-	if (uram_hi > uram_lo)
-		region_program(ULMK_ARCH_MPU_URAM, uram_lo, uram_hi - uram_lo,
-			       RASR_AP_RW_ANY | RASR_XN | RASR_MEM_NORMAL);
-	else
-		region_disable(ULMK_ARCH_MPU_URAM);
+	static_range(ULMK_ARCH_MPU_UTEXT, utext_lo, utext_hi,
+		     RASR_AP_RO_ANY | RASR_MEM_NORMAL);
+	/* User .data/.bss only; the pool above it is kernel heap (areas). */
+	static_range(ULMK_ARCH_MPU_URAM, uram_lo, uram_hi,
+		     RASR_AP_RW_ANY | RASR_XN | RASR_MEM_NORMAL);
 
 	if (mmio_hi > mmio_lo)
 		region_program(ULMK_ARCH_MPU_MMIO, mmio_lo, mmio_hi - mmio_lo,
@@ -177,82 +243,124 @@ void ulmk_arch_mpu_configure(uint8_t prs, const ulmk_arch_region_t *regions,
 	(void)count;
 }
 
-static const ulmk_arch_region_t *g_mpu_regions;
-static uint8_t g_mpu_count;
-static uint8_t g_mpu_prs = 0xFFu;
-static uint8_t g_mpu_dyn; /* non-STACK dynamic slots last programmed */
+#define MPU_FREE_SLOTS	(((1u << ULMK_ARCH_MPU_REGIONS) - 1u) & \
+			 ~((1u << ULMK_ARCH_MPU_UTEXT) | \
+			   (1u << ULMK_ARCH_MPU_URAM) | \
+			   (1u << ULMK_ARCH_MPU_MMIO)))
 
-static uint8_t mpu_dyn_count(const ulmk_arch_region_t *regions, uint8_t count)
+/*
+ * Single core.  @g_mpu_pinned is the key: the TCB's own pinned list, so the
+ * same thread coming back keeps its lazy windows.  Pinned and lazy regions
+ * take the highest free slots so they win any overlap with a static one.
+ */
+static const ulmk_arch_region_t *g_mpu_pinned;
+static uint32_t g_mpu_dyn;
+static uint8_t  g_mpu_next;
+
+static uint8_t top_slot(uint32_t m)
 {
-	uint8_t n = 0u;
-	uint8_t i;
+	return (uint8_t)(31u - (uint32_t)__builtin_clz(m));
+}
 
-	if (!regions)
-		return 0u;
-	for (i = 0u; i < count; i++) {
-		if (regions[i].type != ULMK_REGION_STACK)
-			n++;
-	}
-	return n;
+static void mpu_sync(void)
+{
+	__asm__ volatile("dsb\n\tisb" ::: "memory");
+}
+
+static bool covered_by_uram(const ulmk_arch_region_t *r)
+{
+	extern uint8_t _ulmk_user_ram_start[];
+	extern uint8_t _ulmk_user_pool_start[];
+
+	return r->base >= (uintptr_t)_ulmk_user_ram_start &&
+	       r->base + r->size <= (uintptr_t)_ulmk_user_pool_start;
 }
 
 void ulmk_arch_mpu_switch(const ulmk_arch_region_t *regions, uint8_t count,
 			  uint8_t prs)
 {
-	uint8_t slot;
-	uint8_t i;
-	uint8_t eff;
-
-	if (prs == g_mpu_prs && regions == g_mpu_regions && count == g_mpu_count)
-		return;
-
-	eff = (prs != ULMK_ARCH_PRS_KERNEL) ? mpu_dyn_count(regions, count) : 0u;
+	uint32_t free = MPU_FREE_SLOTS;
+	uint8_t  slot;
+	uint8_t  i;
 
 	/*
-	 * STACK is inside the static URAM window.  Stack-only address spaces
-	 * share that window — avoid tear-down/reprogram on every IPC switch.
+	 * Kernel threads run privileged under PRIVDEFENA and never touch user
+	 * memory: leave the windows, but forget the owner so the next user
+	 * thread (even the same one) is rebuilt against its current areas.
 	 */
-	if (prs == g_mpu_prs && eff == 0u && g_mpu_dyn == 0u &&
-	    prs != ULMK_ARCH_PRS_KERNEL) {
-		g_mpu_regions = regions;
-		g_mpu_count   = count;
+	if (prs == ULMK_ARCH_PRS_KERNEL) {
+		g_mpu_pinned = NULL;
 		return;
 	}
+	if (regions && regions == g_mpu_pinned)
+		return;
 
 	/*
 	 * Keep MPU ENABLE + PRIVDEFENA while reprogramming.  Turning the MPU
 	 * fully off with D-cache live requires a whole-cache clean/invalidate
 	 * (stale memory types); doing that on every switch kills FB/WB
-	 * performance.  PRIVDEFENA keeps privileged fetches on the default
-	 * map for addresses that do not hit a programmed region; dynamic
-	 * slots are rewritten one at a time via region_program().
+	 * performance.  Only user-visible slots change.
 	 */
-	program_static_user();
-
-	slot = ULMK_ARCH_MPU_USER_BASE;
-	if (prs != ULMK_ARCH_PRS_KERNEL && regions) {
-		for (i = 0u; i < count && slot < ULMK_ARCH_MPU_REGIONS; i++) {
-			if (regions[i].type == ULMK_REGION_STACK)
-				continue;
-			region_program(slot, regions[i].base, regions[i].size,
-				       perm_to_attr(regions[i].perms,
-						    regions[i].type));
-			slot++;
-		}
+	for (slot = 0u; slot < ULMK_ARCH_MPU_REGIONS; slot++) {
+		if (free & (1u << slot))
+			region_disable(slot);
 	}
-	eff = (uint8_t)(slot - ULMK_ARCH_MPU_USER_BASE);
-	for (; slot < ULMK_ARCH_MPU_REGIONS; slot++)
-		region_disable(slot);
+	for (i = 0u; regions && i < count && free; i++) {
+		if (regions[i].size == 0u || covered_by_uram(&regions[i]))
+			continue;
+		slot = top_slot(free);
+		free &= ~(1u << slot);
+		region_program(slot, regions[i].base, regions[i].size,
+			       perm_to_attr(regions[i].perms, regions[i].type));
+	}
+	mpu_sync();
 
-	__asm__ volatile("dsb" ::: "memory");
-	REG32(ULMK_ARCH_MPU_CTRL) = ULMK_ARCH_MPU_CTRL_ENABLE |
-				    ULMK_ARCH_MPU_CTRL_PRIVDEFENA;
-	__asm__ volatile("dsb\n\tisb" ::: "memory");
+	g_mpu_pinned = regions;
+	g_mpu_dyn    = free;
+	g_mpu_next   = 0u;
+}
 
-	g_mpu_prs     = prs;
-	g_mpu_regions = regions;
-	g_mpu_count   = count;
-	g_mpu_dyn     = eff;
+void ulmk_arch_mpu_flush(void)
+{
+	uint32_t m;
+
+	for (m = g_mpu_dyn; m; m &= m - 1u)
+		region_disable((uint8_t)__builtin_ctz(m));
+	mpu_sync();
+}
+
+bool ulmk_arch_mpu_load(const ulmk_arch_region_t *win)
+{
+	uint32_t m;
+	uint8_t  n;
+	uint8_t  slot;
+	uint8_t  i;
+
+	if (!g_mpu_dyn || win->size < 32u || (win->size & (win->size - 1u)) ||
+	    (win->base & (win->size - 1u)))
+		return false;
+
+	/* The window is live yet the access faulted: a real violation. */
+	for (m = g_mpu_dyn; m; m &= m - 1u) {
+		REG32(ULMK_ARCH_MPU_RNR) = (uint32_t)__builtin_ctz(m);
+		if ((REG32(ULMK_ARCH_MPU_RASR) & RASR_ENABLE) &&
+		    (REG32(ULMK_ARCH_MPU_RBAR) & ~0x1Fu) == (uint32_t)win->base)
+			return false;
+	}
+
+	n = (uint8_t)__builtin_popcount(g_mpu_dyn);
+	m = g_mpu_dyn;
+	for (i = 0u; i < g_mpu_next % n; i++)
+		m &= m - 1u;
+	slot = (uint8_t)__builtin_ctz(m);
+	g_mpu_next = (uint8_t)((g_mpu_next + 1u) % n);
+
+	/* Disable first: a half-written pair must never describe a region. */
+	region_disable(slot);
+	region_program(slot, win->base, win->size,
+		       perm_to_attr(win->perms, win->type));
+	mpu_sync();
+	return true;
 }
 
 bool ulmk_arch_mpu_addr_permitted(uintptr_t addr, size_t size, uint32_t perms)

@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
  * Memory isolation — public API + linker symbols.
- * ARM: avoid mem_grant livelock (separate known issue); cover anon + faults.
  */
 #include "sdk_test_util.h"
 
@@ -19,6 +18,7 @@ extern uint8_t _ulmk_kernel_data_start[];
 static ulmk_notif_t   g_sync;
 static volatile void *g_shared;
 static volatile int   g_grant_result = -1;
+static volatile uint32_t *volatile g_probe_addr;
 
 static void grant_reader(void *arg)
 {
@@ -74,13 +74,25 @@ static void kread_trigger(void *arg)
 	ulmk_thread_exit();
 }
 
-static int probe_denied(const char *label, const char *name,
-			void (*entry)(void *))
+static void addr_trigger(void *arg)
+{
+	volatile uint32_t val;
+	uint32_t          bits = 0u;
+
+	(void)arg;
+	ulmk_notif_wait(g_sync, BIT_GO, &bits);
+	ulmk_notif_signal(g_sync, BIT_ARMED);
+	val = *g_probe_addr;
+	(void)val;
+	ulmk_notif_signal(g_sync, BIT_ALIVE);
+	ulmk_thread_exit();
+}
+
+static int probe_run(const char *label, ulmk_tid_t tid)
 {
 	uint32_t bits = 0u;
 
-	if (sdk_spawn(name, entry, NULL, 30u, STACK_SZ, 0u) ==
-	    ULMK_TID_INVALID) {
+	if (tid == ULMK_TID_INVALID) {
 		sdk_puts("mem_isolation: FAIL spawn ");
 		sdk_puts(label);
 		sdk_puts("\n");
@@ -108,6 +120,22 @@ static int probe_denied(const char *label, const char *name,
 	sdk_puts(label);
 	sdk_puts(" (access allowed)\n");
 	return 0;
+}
+
+static int probe_denied(const char *label, const char *name,
+			void (*entry)(void *))
+{
+	return probe_run(label, sdk_spawn(name, entry, NULL, 30u, STACK_SZ,
+					  ULMK_CAP_INHERIT));
+}
+
+/* @addr is read by a fresh thread holding @caps; the read must fault. */
+static int probe_addr_denied(const char *label, volatile uint32_t *addr,
+			     uint32_t caps)
+{
+	g_probe_addr = addr;
+	return probe_run(label, sdk_spawn("paddr", addr_trigger, NULL, 30u,
+					  STACK_SZ, caps));
 }
 
 static void supervisor(void *arg)
@@ -142,13 +170,7 @@ static void supervisor(void *arg)
 		ulmk_thread_exit();
 	}
 
-	/*
-	 * Scenario 2 — cross-thread grant.  Skipped on ARMv7-M QEMU where
-	 * mem_grant currently livelocks; covered by abi_smoke there.
-	 */
-#if defined(__ARM_ARCH)
-	sdk_puts("mem_isolation: scenario 2 (grant read) SKIP\n");
-#else
+	/* Scenario 2 — cross-thread grant. */
 	{
 		ulmk_tid_t reader;
 		void      *gbuf;
@@ -162,8 +184,9 @@ static void supervisor(void *arg)
 		} else {
 			*(volatile uint32_t *)gbuf = PATTERN_A;
 			g_shared = gbuf;
+			/* Explicit caps: the reader must not inherit gbuf. */
 			reader = sdk_spawn("reader", grant_reader, NULL, 30u,
-					   STACK_SZ, 0u);
+					   STACK_SZ, ULMK_CAP_NONE);
 			if (reader == ULMK_TID_INVALID ||
 			    ulmk_mem_grant(gbuf, 64u, reader,
 					  ULMK_PERM_READ) < 0) {
@@ -183,19 +206,16 @@ static void supervisor(void *arg)
 			ulmk_mem_unmap(gbuf, 64u);
 		}
 	}
-#endif
 
 	/*
-	 * QEMU's TriCore MPU and its ARMv7-M MPU do not hold U-mode out of
-	 * kernel memory the way the silicon does, so the probe would report a
-	 * kernel bug that is really an emulation gap.  Kept out of the run
-	 * rather than softened: a probe whose failure is tolerated is the
-	 * reason this case went years without noticing a real hole.  The same
-	 * ground is covered on hardware by the TC275 silicon suite and by the
-	 * ESP32-P4 board_pmp_neg component.
+	 * QEMU's TriCore MPU does not hold U-mode out of kernel memory the way
+	 * the silicon does, so the probe would report a kernel bug that is
+	 * really an emulation gap.  Kept out of the run rather than softened: a
+	 * probe whose failure is tolerated is the reason this case went years
+	 * without noticing a real hole.  The same ground is covered on hardware
+	 * by the TC275 silicon suite.
 	 */
-#if defined(__TRICORE__) || defined(__tricore__) || \
-	(defined(__ARM_ARCH) && __ARM_ARCH < 8)
+#if defined(__TRICORE__) || defined(__tricore__)
 	sdk_puts("mem_isolation: scenario 5 (kernel data fault) SKIP\n");
 	sdk_puts("mem_isolation: scenario 4 (kernel exec fault) SKIP\n");
 	(void)kread_trigger;
@@ -211,14 +231,55 @@ static void supervisor(void *arg)
 #endif
 
 	/*
-	 * Scenario 3 used to write to an address it had just unmapped and call
-	 * the result a fault.  It is not one on either arch: the user pool is
-	 * covered by a single static grant, so unmapping drops the bookkeeping
-	 * and leaves the window open.  Proving revocation needs per-allocation
-	 * regions, which the kernel does not do yet — asserting a fault here
-	 * only reintroduces a test that passes for the wrong reason.
+	 * Scenarios 3, 6 and 7 fault only because the pool is in no static
+	 * window.  QEMU's TriCore MPU has too few ranges for lazy windows, so
+	 * the user RAM window there runs to the end of the pool.  The TC275
+	 * silicon suite (silicon_mem_grant) covers them on hardware.
 	 */
+#if defined(__TRICORE__) || defined(__tricore__)
 	sdk_puts("mem_isolation: scenario 3 (unmap revoke) SKIP\n");
+	sdk_puts("mem_isolation: scenario 6 (no inherited area) SKIP\n");
+	sdk_puts("mem_isolation: scenario 7 (TCB read) SKIP\n");
+	(void)probe_denied;
+	(void)probe_addr_denied;
+#else
+	/*
+	 * Scenario 3 — the pool is kernel heap, not a static user window, so
+	 * an area really goes away: a child that inherited the block loses it
+	 * when the owner unmaps (cascade), and must fault on the next access.
+	 */
+	{
+		volatile uint32_t *blk;
+		ulmk_tid_t         t;
+
+		blk = (volatile uint32_t *)ulmk_malloc(64u);
+		g_probe_addr = blk;
+		t = blk ? sdk_spawn("paddr", addr_trigger, NULL, 30u, STACK_SZ,
+				    ULMK_CAP_INHERIT) : ULMK_TID_INVALID;
+		if (blk)
+			ulmk_free((void *)blk);
+		if (!probe_run("scenario 3 (unmap revoke)", t))
+			overall = 0;
+	}
+
+	/* Scenario 6 — explicit caps carry no areas: the parent's block is out. */
+	{
+		volatile uint32_t *blk = (volatile uint32_t *)ulmk_malloc(64u);
+
+		if (!blk || !probe_addr_denied("scenario 6 (no inherited area)",
+					       blk, ULMK_CAP_NONE))
+			overall = 0;
+		if (blk)
+			ulmk_free((void *)blk);
+	}
+
+	/* Scenario 7 — a TCB is kernel heap; its handle must not be a door. */
+	if (!probe_addr_denied("scenario 7 (TCB read)",
+			       (volatile uint32_t *)(uintptr_t)ulmk_thread_self(),
+			       ULMK_CAP_INHERIT))
+		overall = 0;
+#endif
+
 	ulmk_mem_unmap(base, 128u);
 	base = NULL;
 
@@ -238,7 +299,7 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	sdk_puts("mem_isolation: start\n");
 
 	g_sync = ulmk_notif_create();
-	tid = sdk_spawn("sup", supervisor, NULL, 10u, 4096u, 0u);
-	ulmk_cap_grant(tid, ULMK_CAP_SPAWN);
+	tid = sdk_spawn("sup", supervisor, NULL, 10u, 4096u, ULMK_CAP_INHERIT);
+	(void)tid;
 	ulmk_thread_exit();
 }

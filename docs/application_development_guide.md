@@ -13,7 +13,7 @@
 2. [Repository Layout for an Application](#2-repository-layout-for-an-application)
 3. [Creating a Component](#3-creating-a-component)
 4. [Creating the Root Thread](#4-creating-the-root-thread)
-5. [Per-Thread Heap (slabAO Model)](#5-per-thread-heap-slabao-model)
+5. [Memory: Capabilities, Areas and the Heap](#5-memory-capabilities-areas-and-the-heap)
 6. [Providing Board Services](#6-providing-board-services)
 7. [Creating a Custom Board (chip input)](#7-creating-a-custom-board-chip-input)
 8. [Configuration Model (per layer)](#8-configuration-model-per-layer)
@@ -283,10 +283,10 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 
 ---
 
-## 5. Per-Thread Heap (slabAO Model)
+## 5. Memory: Capabilities, Areas and the Heap
 
-Each thread may carry a private heap allocated at creation time.  Set
-`attr.heap_size` to the number of bytes the thread needs beyond its stack:
+A thread's capabilities and memory come from the thread that created it, and
+never exceed what the creator holds.  `attr.caps` selects how:
 
 ```c
 ulmk_thread_attr_t attr = {0};
@@ -295,38 +295,39 @@ attr.entry      = worker_entry;
 attr.priority   = 5;
 attr.stack_size = 2048;
 attr.privilege  = ULMK_PRIV_DRIVER;
-attr.heap_size  = 8192;   /* 8 KiB private heap */
+attr.caps       = ULMK_CAP_HEAP | ULMK_CAP_IRQ;  /* listed caps, no areas */
 ulmk_tid_t tid = ulmk_thread_create(&attr);
 ```
 
-The kernel allocates a contiguous *slabAO* (`stack_size + heap_size` bytes)
-from `user_pool` and covers it with a single MPU DPR.  The TCB is kept in
-a separate allocation so userspace cannot reach kernel metadata through the DPR.
+- `ULMK_CAP_INHERIT` (0, the `{0}` default): every capability and every memory
+  area of the creator.
+- A mask: those capabilities the creator holds, and no areas.
+- `ULMK_CAP_NONE`: nothing at all.
 
-Inside the thread, retrieve the heap area:
-
-```c
-ulmk_heap_info_t info;
-ulmk_get_thread_heap(&info);   /* info.base, info.size */
-
-uint8_t *heap = (uint8_t *)(uintptr_t)info.base;
-/* use heap[0 .. info.size-1] directly */
-```
-
-To expand the heap at runtime (requires `ULMK_PRIV_DRIVER`):
+Allocate private memory with `ulmk_malloc()` (needs `ULMK_CAP_HEAP`).  Every
+call is a syscall that records one area for the caller; nothing is programmed
+into the MPU until the thread first touches the block:
 
 ```c
-int rc = ulmk_heap_extend(4096);   /* add 4 KiB; new DPR entry added */
+uint8_t *buf = ulmk_malloc(4096);
+if (!buf)
+	return ULMK_ENOMEM;
+/* ... */
+ulmk_free(buf);   /* also revokes every grant made from buf */
 ```
+
+Share a block with `ulmk_mem_grant(buf, size, tid, perms)` and take it back
+with `ulmk_mem_revoke(buf, tid)`; revoking also removes whatever `tid` passed
+on from that grant.
 
 **Notes:**
 
-- `attr.heap_size = 0` means no heap; `ulmk_get_thread_heap()` returns
-  `ULMK_EPERM` in that case.
-- Always declare `ulmk_thread_attr_t attr = {0};` before setting fields so that
-  `heap_size` defaults to zero safely.
-- There is no userspace allocator included in the kernel.  The heap is a raw
-  contiguous block; use `ulmk_heap_extend()` when more memory is needed.
+- Memory a thread did not allocate, inherit or receive by grant faults, and the
+  thread is killed.  In particular, never hand another thread a pointer into
+  your stack or into a `malloc` block you did not grant: copy the bytes into the
+  IPC message instead (the board console client does exactly that).
+- Each block is rounded to the MPU granule.  Allocate few, large blocks rather
+  than many small ones.
 
 ---
 

@@ -35,6 +35,9 @@ static inline void ulmk_arch_send_ipi(uint32_t c) { (void)c; }
 
 /* MPU region descriptor */
 #define ULMK_ARCH_MAX_REGIONS	12
+#define ULMK_ARCH_REGION_ALIGN	64u
+#define ULMK_ARCH_MPU_WIN_POW2	0
+#define ULMK_ARCH_MPU_WIN_MIN	8u
 
 typedef struct {
 	uintptr_t base;

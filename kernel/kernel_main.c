@@ -20,6 +20,7 @@
 #include <kernel/include/ulmk_printk.h>
 #include <kernel/include/ulmk_syscall_wcet_internal.h>
 #include <kernel/include/ulmk_timer.h>
+#include <kernel/include/ulmk_xcall.h>
 #include <kernel/syscall/syscall_router.h>
 
 /* Linker-provided user pool boundaries (defined in .user_pool section). */
@@ -37,12 +38,16 @@ void ulmk_kern_sched_dispatch(bool from_isr)
 
 void ulmk_kern_ipi_resched(void)
 {
+#if ULMK_CONFIG_ENABLE_SMP
+	ulmk_xcall_service();
+#endif
 	ulmk_sched_request_resched();
 }
 
 #if ULMK_CONFIG_ENABLE_SMP
 void ulmk_kern_ipi_from_isr(void)
 {
+	ulmk_xcall_service();
 	ulmk_sched_request_resched();
 	/*
 	 * Early IPI before sched_start publishes current: arm needs_resched
@@ -113,11 +118,8 @@ void ulmk_kern_trap_mpu_restore(void)
 {
 	ulmk_thread_t *cur = ulmk_sched_current();
 
-	if (!cur)
-		return;
-
-	ulmk_arch_mpu_switch(cur->regions, cur->region_count,
-			     cur->privilege == ULMK_PRIV_KERNEL ? 0u : 1u);
+	if (cur)
+		ulmk_sched_mpu_switch(cur);
 }
 
 uint32_t ulmk_kern_trap_syscall(uint8_t tin, uint32_t args[4])

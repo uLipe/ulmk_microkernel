@@ -10,6 +10,10 @@ ULMK_KERNEL_STACK_SIZE = 0x1000;
 ULMK_ISR_STACK_SIZE    = 0x0800;
 ULMK_MPU_ALIGN         = 32;
 
+/* PMSAv7 power-of-two regions: see linker/kernel/user_ram_start.ld.in. */
+ULMK_USER_TEXT_ALIGN   = 0x8000;
+ULMK_USER_RAM_ALIGN    = 0x8000;
+
 HAVE_CSA        = 0;
 HAVE_SMALL_DATA = 0;
 HAVE_BMHD       = 0;

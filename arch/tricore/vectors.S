@@ -15,6 +15,7 @@
  */
 
     .extern ulmk_arch_trap_entry
+    .extern ulmk_arch_trap_mem_fault
     .extern ulmk_arch_syscall_entry
     .extern ulmk_kern_irq_dispatch
 
@@ -42,15 +43,8 @@ _trap_class0:
     .align  5
     .global _trap_class1
 _trap_class1:
-    mov     %d4, 1
-    mov     %d5, %d15
-    mfcr    %d15, 0xFE04
-    mov     %d14, 0x3000
-    andn    %d15, %d15, %d14
-    mtcr    0xFE04, %d15
-    isync
-    call    ulmk_arch_trap_entry
-    j       .
+    mov     %d8, %d15
+    j       _trap_class1_body
 
 /* Class 2 — Instruction Error Trap */
     .align  5
@@ -155,6 +149,36 @@ _trap_class7:
     call    ulmk_arch_trap_entry
     j       .
 
+/*
+ * Class 1 body (outside the 32-byte slot).  An MPR/MPW from a user thread
+ * may only mean a lazy area window is not loaded yet, so the lower context
+ * is saved and the faulting instruction resumed with RFE once it is.  TIN
+ * rides in D8: upper context, already saved by the trap and restored by RFE.
+ * PRS 0 comes before SVLCX (the CSA pool is kernel RAM) and interrupts stay
+ * off for the kernel part; RFE restores the thread's ICR.IE.
+ */
+_trap_class1_body:
+    disable
+    mfcr    %d15, 0xFE04
+    mov     %d14, 0x3C00
+    andn    %d15, %d15, %d14
+    mov     %d14, 0x800
+    or      %d15, %d14
+    mtcr    0xFE04, %d15
+    isync
+    svlcx
+    mov     %d4, %d8
+    call    ulmk_arch_trap_mem_fault
+    jz      %d2, 1f
+    rslcx
+    rfe
+1:
+    rslcx
+    mov     %d4, 1
+    mov     %d5, %d8
+    call    ulmk_arch_trap_entry
+    j       .
+
 /* ---------------------------------------------------------------------------
  * Interrupt vector table — 32-byte slots, BIV-relative (VSS=0)
  *
@@ -176,16 +200,15 @@ _trap_class7:
     .global _ulmk_int_table
 _ulmk_int_table:
 
-/* SRPN=0 — priority 0 is disabled; this slot is never dispatched. */
-    rfe
-    .align  5		/* pad to next 32-byte boundary */
-
 /*
- * SRPN=1..255 — generic userspace IRQ dispatcher with preemption support.
- * Board services bind hardware IRQs (e.g. STM0) to notifications via
- * ulmk_irq_bind_hw(); the kernel dispatches by SRPN read from ICR.CCPN.
+ * Every slot, 0 included, is the same generic dispatcher: the kernel reads
+ * the SRPN from ICR.CCPN, not from the slot.  The entry address is
+ * BIV | (PIPN << 5) -- an OR, not an add -- and BIV is only 256-byte
+ * aligned, so with BIV bits 8..12 set a PIPN lands on another slot of this
+ * table (on 0x..300, SRPN 8/16/24 land on slot 0).  Identical slots make
+ * that harmless without aligning the table to its 8 KB size.
  */
-    .rept   255
+    .rept   256
     j       _arch_generic_preempt_isr
     .align  5
     .endr

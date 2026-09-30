@@ -380,8 +380,8 @@ void ulmk_kern_irq_dispatch(uint8_t srpn)
 		pc->in_irq_attach    = true;
 		do_notify = ulmk_arch_irq_attach_call(
 			b->attach_fn, b->attach_data,
-			b->owner ? b->owner->regions : NULL,
-			b->owner ? b->owner->region_count : 0u);
+			b->owner ? &b->owner->stack_region : NULL,
+			(b->owner && b->owner->stack_region.size) ? 1u : 0u);
 		pc->in_irq_attach    = false;
 		pc->irq_attach_owner = NULL;
 		pc->irq_attach_srpn  = 0u;

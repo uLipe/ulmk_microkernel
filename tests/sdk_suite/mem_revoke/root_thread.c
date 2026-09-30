@@ -1,25 +1,31 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * mem_revoke — bookkeeping after grant+revoke.
+ * mem_revoke — revoke removes access, and takes derived grants with it.
  *
- * Anon heap lives inside the shared user-RAM window on every current arch,
- * so a peer can still touch the bytes after revoke; proving a fault needs
- * per-allocation MPU/PMP, which the kernel does not do yet.  What we can
- * prove today: revoke removes the peer's region entry (second revoke is
- * ESRCH/EINVAL), and the owner keeps the mapping.
+ * The owner grants a block to a peer, the peer re-grants it to a third
+ * thread, then the owner revokes the peer.  Both must fault on their next
+ * access: the pool is not covered by any static user window, so an area
+ * that is gone leaves nothing to fall back on.
  */
 #include "sdk_test_util.h"
 
 #define MAGIC_OWNER	0xC0FFEEu
 #define STACK_SZ	2048u
+#define PROBE_MS	200u
 #define BIT_GO		(1u << 0)
-#define BIT_DONE	(1u << 1)
+#define BIT_READ	(1u << 1)
+#define BIT_GO2		(1u << 2)
+#define BIT_ARMED	(1u << 3)
+#define BIT_ALIVE	(1u << 4)
 
 static int g_pass;
 static int g_fail;
-static ulmk_notif_t g_done;
+static ulmk_notif_t g_peer_sync;
+static ulmk_notif_t g_gc_sync;
 static volatile uint32_t *g_shared;
-static volatile int g_peer_saw_after_revoke;
+static volatile ulmk_tid_t g_gc;
+static volatile int g_peer_read_ok;
+static volatile int g_peer_regrant_ok;
 
 static void check(const char *name, int ok)
 {
@@ -34,16 +40,54 @@ static void check(const char *name, int ok)
 
 #define CHECK(name, cond) check((name), (cond) ? 1 : 0)
 
+/*
+ * Read once while granted, then — after the owner revoked — read again
+ * between ARMED and ALIVE.  Reaching ALIVE means the revoke left access.
+ */
+static void reader(ulmk_notif_t sync, volatile int *read_ok)
+{
+	volatile uint32_t val;
+	uint32_t bits = 0u;
+
+	ulmk_notif_wait(sync, BIT_GO, &bits);
+	*read_ok = (g_shared[0] == MAGIC_OWNER);
+	ulmk_notif_signal(sync, BIT_READ);
+
+	bits = 0u;
+	ulmk_notif_wait(sync, BIT_GO2, &bits);
+	ulmk_notif_signal(sync, BIT_ARMED);
+	val = g_shared[0];
+	(void)val;
+	ulmk_notif_signal(sync, BIT_ALIVE);
+	ulmk_thread_exit();
+}
+
+static volatile int g_gc_read_ok;
+
 static void peer_entry(void *arg)
+{
+	(void)arg;
+	g_peer_regrant_ok = (ulmk_mem_grant((void *)g_shared, 256u, g_gc,
+					    ULMK_PERM_READ) == ULMK_OK);
+	reader(g_peer_sync, &g_peer_read_ok);
+}
+
+static void gc_entry(void *arg)
+{
+	(void)arg;
+	reader(g_gc_sync, &g_gc_read_ok);
+}
+
+static int killed_on_access(ulmk_notif_t sync)
 {
 	uint32_t bits = 0u;
 
-	(void)arg;
-	ulmk_notif_wait(g_done, BIT_GO, &bits);
-	if (g_shared)
-		g_peer_saw_after_revoke = (g_shared[0] == MAGIC_OWNER);
-	ulmk_notif_signal(g_done, BIT_DONE);
-	ulmk_thread_exit();
+	ulmk_notif_signal(sync, BIT_GO2);
+	if (ulmk_notif_wait(sync, BIT_ARMED, &bits) != ULMK_OK)
+		return 0;
+	bits = 0u;
+	return ulmk_notif_wait_timeout(sync, BIT_ALIVE, &bits, PROBE_MS) ==
+	       ULMK_ETIMEOUT;
 }
 
 void ulmk_root_thread(const ulmk_boot_info_t *info)
@@ -57,11 +101,11 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	sdk_puts("mem_revoke: begin\n");
 	g_pass = 0;
 	g_fail = 0;
-	g_shared = NULL;
-	g_peer_saw_after_revoke = 0;
 
-	g_done = ulmk_notif_create();
-	CHECK("notif", g_done != ULMK_NOTIF_INVALID);
+	g_peer_sync = ulmk_notif_create();
+	g_gc_sync   = ulmk_notif_create();
+	CHECK("notif", g_peer_sync != ULMK_NOTIF_INVALID &&
+		       g_gc_sync != ULMK_NOTIF_INVALID);
 
 	page = (uint32_t *)ulmk_mem_map(NULL, 256u,
 					ULMK_PERM_READ | ULMK_PERM_WRITE,
@@ -73,36 +117,52 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	page[0] = MAGIC_OWNER;
 	g_shared = page;
 
-	peer = sdk_spawn("peer", peer_entry, NULL, 10u, STACK_SZ, 0u);
-	CHECK("peer", peer != ULMK_TID_INVALID);
-	if (peer == ULMK_TID_INVALID)
+	/* Explicit caps: neither thread inherits the block. */
+	g_gc = sdk_spawn("gc", gc_entry, NULL, 20u, STACK_SZ, ULMK_CAP_NONE);
+	peer = sdk_spawn("peer", peer_entry, NULL, 10u, STACK_SZ,
+			 ULMK_CAP_NONE);
+	CHECK("spawn", g_gc != ULMK_TID_INVALID && peer != ULMK_TID_INVALID);
+	if (g_gc == ULMK_TID_INVALID || peer == ULMK_TID_INVALID)
 		goto report;
 
 	rc = ulmk_mem_grant((void *)page, 256u, peer,
 			    ULMK_PERM_READ | ULMK_PERM_WRITE);
 	CHECK("grant", rc == ULMK_OK);
 
+	/* Peer runs its re-grant, then both read once while granted. */
+	ulmk_notif_signal(g_peer_sync, BIT_GO);
+	ulmk_notif_wait(g_peer_sync, BIT_READ, &bits);
+	bits = 0u;
+	ulmk_notif_signal(g_gc_sync, BIT_GO);
+	ulmk_notif_wait(g_gc_sync, BIT_READ, &bits);
+	CHECK("peer_regrant", g_peer_regrant_ok);
+	CHECK("peer_read", g_peer_read_ok);
+	CHECK("gc_read", g_gc_read_ok);
+
+	CHECK("revoke_foreign",
+	      ulmk_mem_revoke((void *)page, ulmk_thread_self()) != ULMK_OK);
 	rc = ulmk_mem_revoke((void *)page, peer);
 	CHECK("revoke", rc == ULMK_OK);
-
 	rc = ulmk_mem_revoke((void *)page, peer);
 	CHECK("revoke_gone", rc != ULMK_OK);
-
+	CHECK("revoke_cascade",
+	      ulmk_mem_revoke((void *)page, g_gc) != ULMK_OK);
 	CHECK("revoke_null", ulmk_mem_revoke(NULL, peer) != ULMK_OK);
 	CHECK("revoke_bad_tid",
 	      ulmk_mem_revoke((void *)page, ULMK_TID_INVALID) != ULMK_OK);
 
-	/* Re-grant still works after a clean revoke. */
-	rc = ulmk_mem_grant((void *)page, 256u, peer,
-			    ULMK_PERM_READ | ULMK_PERM_WRITE);
-	CHECK("regrant", rc == ULMK_OK);
-	rc = ulmk_mem_revoke((void *)page, peer);
-	CHECK("revoke2", rc == ULMK_OK);
-
-	ulmk_notif_signal(g_done, BIT_GO);
-	bits = 0u;
-	CHECK("peer_done",
-	      ulmk_notif_wait(g_done, BIT_DONE, &bits) == ULMK_OK);
+	/*
+	 * QEMU's TriCore MPU has too few ranges for lazy windows, so the user
+	 * RAM window there runs to the end of the pool and a revoked block
+	 * stays reachable.  silicon_mem_grant checks both faults on the TC275.
+	 */
+#if defined(__TRICORE__) || defined(__tricore__)
+	sdk_puts(".skip peer_fault\n.skip gc_fault\n");
+	(void)killed_on_access;
+#else
+	CHECK("peer_fault", killed_on_access(g_peer_sync));
+	CHECK("gc_fault", killed_on_access(g_gc_sync));
+#endif
 
 	CHECK("owner_still", page[0] == MAGIC_OWNER);
 	CHECK("unmap", ulmk_mem_unmap((void *)page, 256u) == ULMK_OK);

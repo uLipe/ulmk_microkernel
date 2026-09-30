@@ -11,21 +11,32 @@
 #define CONSOLE_MSG_PUTC	1u
 #define CONSOLE_MSG_WRITE	2u
 #define CONSOLE_WRITE_MAX	256u
+/* Bytes travel inline: the server never dereferences a client pointer. */
+#define CONSOLE_CHUNK_MAX	((ULMK_MSG_WORDS - 1u) * 4u)
 #define CONSOLE_FMT_BUF		160u
 
 static void console_write(const char *buf, uint32_t len)
 {
 	ulmk_msg_t msg;
 	ulmk_ep_t ep = board_service_ep();
+	uint8_t *dst = (uint8_t *)&msg.words[1];
+	uint32_t n;
+	uint32_t i;
 
 	if (!buf || len == 0u || ep == ULMK_EP_INVALID)
 		return;
 	if (len > CONSOLE_WRITE_MAX)
 		len = CONSOLE_WRITE_MAX;
-	msg.label    = CONSOLE_MSG_WRITE;
-	msg.words[0] = (uint32_t)(uintptr_t)buf;
-	msg.words[1] = len;
-	(void)ulmk_ep_call(ep, &msg);
+	while (len > 0u) {
+		n = len < CONSOLE_CHUNK_MAX ? len : CONSOLE_CHUNK_MAX;
+		for (i = 0u; i < n; i++)
+			dst[i] = (uint8_t)buf[i];
+		msg.label    = CONSOLE_MSG_WRITE;
+		msg.words[0] = n;
+		(void)ulmk_ep_call(ep, &msg);
+		buf += n;
+		len -= n;
+	}
 }
 
 void board_console_putc(char c)

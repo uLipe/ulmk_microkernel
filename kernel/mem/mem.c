@@ -5,6 +5,10 @@
  * Memory handlers — kernel/mem/mem.c
  * Implements: kernel/syscall/syscall_router.h ulmk_kern_mem_* prototypes
  * Reference: docs/api_spec.md §9
+ *
+ * Mapping only records an area.  The MPU/PMP is loaded lazily from
+ * ulmk_kern_mem_fault() when the thread first touches it, so the number of
+ * areas a thread holds is not bounded by the hardware slot count.
  */
 
 #include <stdint.h>
@@ -13,279 +17,280 @@
 #include <ulmk/config.h>
 #include <kernel/syscall/syscall_router.h>
 #include <kernel/include/ulmk_thread_internal.h>
+#include <kernel/include/ulmk_area_internal.h>
 #include <kernel/include/ulmk_mem_internal.h>
+#include <kernel/include/ulmk_klock.h>
 #include <kernel/include/ulmk_sched.h>
+#include <kernel/include/ulmk_percpu.h>
+#include <kernel/include/ulmk_xcall.h>
 #include <ulmk_arch.h>
 
-/*
- * Add a region to a thread's MPU region list.
- * Returns ULMK_OK or ULMK_ENOSPC if the list is full.
- */
-static int thread_add_region(ulmk_thread_t *th, uintptr_t base, size_t size,
-			     uint32_t perms, uint8_t type)
+#define MEM_PERMS	(ULMK_PERM_READ | ULMK_PERM_WRITE | ULMK_PERM_EXEC)
+
+static ulmk_thread_t *set_owner(struct ulmk_area_set *s)
 {
-	ulmk_arch_region_t *r;
-
-	if (th->region_count >= ULMK_ARCH_MAX_REGIONS)
-		return ULMK_ENOSPC;
-
-	r        = &th->regions[th->region_count];
-	r->base  = base;
-	r->size  = size;
-	r->perms = perms;
-	r->type  = type;
-	th->region_count++;
-	return ULMK_OK;
+	return (ulmk_thread_t *)((uint8_t *)s - offsetof(ulmk_thread_t, areas));
 }
 
 /*
- * Remove a region from @th that starts at @base.
- * Returns ULMK_OK if found and removed, ULMK_EINVAL if not found.
+ * Windows are only ever live on the CPU running their thread, and a switch
+ * drops them, so leaving the set is enough unless that thread is running.
+ * Another CPU running it is flushed by mem_settle() once the lock is gone.
  */
-static int thread_remove_region(ulmk_thread_t *th, uintptr_t base)
+void ulmk_kern_area_dropped(struct ulmk_area_set *s)
 {
-	uint8_t i;
-	uint8_t last;
+	ulmk_thread_t *th = set_owner(s);
 
-	for (i = 0u; i < th->region_count; i++) {
-		if (th->regions[i].base != base)
-			continue;
-
-		last = th->region_count - 1u;
-		if (i != last)
-			th->regions[i] = th->regions[last];
-		th->region_count--;
-		return ULMK_OK;
+	if (th == ulmk_sched_current()) {
+		ulmk_arch_mpu_flush();
+		return;
 	}
-
-	return ULMK_EINVAL;
+#if ULMK_CONFIG_ENABLE_SMP
+	if (th->cpu != (uint8_t)ulmk_arch_cpu_id() &&
+	    ulmk_percpu_of(th->cpu)->current == th)
+		ulmk_percpu()->mpu_shootdown |= 1u << th->cpu;
+#endif
 }
 
-/*
- * Heap syscall handlers — expose TLSF heap to userspace.
- * Allocated memory is NOT automatically granted as an MPU region;
- * caller must use ULMK_SYS_MMAP / ULMK_SYS_MEM_GRANT for that.
- */
-uint32_t ulmk_kern_heap_alloc(uint32_t size)
+void ulmk_kern_area_retire(struct ulmk_area *a)
 {
-	void *p = ulmk_heap_alloc((size_t)size);
+	struct ulmk_percpu *pc = ulmk_percpu();
 
-	return (uint32_t)(uintptr_t)p;
+	a->next = pc->area_retired;
+	pc->area_retired = a;
 }
 
-uint32_t ulmk_kern_heap_free(uint32_t ptr)
+#if ULMK_CONFIG_ENABLE_SMP
+static uint32_t mpu_flush_xcall(void *arg)
 {
-	ulmk_heap_free((void *)(uintptr_t)ptr);
+	(void)arg;
+	ulmk_arch_mpu_flush();
 	return 0u;
 }
+#endif
 
-uint32_t ulmk_kern_heap_aligned_alloc(uint32_t align, uint32_t size)
+/*
+ * Finish a drop: flush the CPUs still running a thread that lost an area,
+ * then free the blocks retired meanwhile.  Called with no lock held.  The
+ * list is detached first so a nested settle (from a request served while
+ * waiting) cannot free a block this one has not shot down yet.
+ */
+static void mem_settle(void)
 {
-	void *p = ulmk_heap_aligned_alloc((size_t)align, (size_t)size);
+	struct ulmk_percpu *pc = ulmk_percpu();
+	struct ulmk_area *a;
+	struct ulmk_area *n;
+#if ULMK_CONFIG_ENABLE_SMP
+	uint32_t mask;
+	uint32_t cpu;
+#endif
 
-	return (uint32_t)(uintptr_t)p;
+	a = pc->area_retired;
+	pc->area_retired = NULL;
+#if ULMK_CONFIG_ENABLE_SMP
+	mask = pc->mpu_shootdown;
+	pc->mpu_shootdown = 0u;
+	for (cpu = 0u; mask; cpu++, mask >>= 1) {
+		if (mask & 1u)
+			(void)ulmk_xcall(cpu, mpu_flush_xcall, NULL);
+	}
+#endif
+	for (; a; a = n) {
+		n = a->next;
+		ulmk_heap_free((void *)a->base);
+		ulmk_heap_free(a);
+	}
+}
+
+bool ulmk_kern_mem_fault(uintptr_t addr, uint32_t access)
+{
+	ulmk_thread_t *cur = ulmk_sched_current();
+	ulmk_arch_irq_key_t key;
+	struct ulmk_area *a;
+	ulmk_arch_region_t win;
+	bool ok = false;
+
+	if (!cur || cur->privilege == ULMK_PRIV_KERNEL)
+		return false;
+
+	key = ulmk_arch_spin_lock_irqsave(&g_ulmk_lock_area);
+	a = ulmk_area_find(&cur->areas, addr);
+	if (a && (a->perms & access) == access &&
+	    ulmk_area_window(a, addr, &win) == ULMK_OK)
+		ok = ulmk_arch_mpu_load(&win);
+	ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_area, key);
+	return ok;
 }
 
 uint32_t ulmk_kern_mem_map(uint32_t hint, uint32_t size,
-			 uint32_t perms, uint32_t flags)
+			   uint32_t perms, uint32_t flags)
 {
 	ulmk_thread_t *cur = ulmk_sched_current();
-	void        *mem;
-	uintptr_t    base;
-	int          rc;
+	ulmk_arch_irq_key_t key;
+	uintptr_t base;
+	size_t    len = size;
+	uint8_t   type;
+	uint8_t   aflags = 0u;
+	int       rc;
 
 	if (!cur || size == 0u)
 		return (uint32_t)(int32_t)ULMK_EINVAL;
 
 	if (flags & ULMK_MMAP_PERIPH) {
-		/*
-		 * Peripheral mapping: caller provides the MMIO base address.
-		 * Requires ULMK_CAP_MAP_PERIPH (enforced in syscall_router.c).
-		 */
-		if (hint == 0u)
-			return (uint32_t)(int32_t)ULMK_EINVAL;
-
-		base = (uintptr_t)hint;
-		rc   = thread_add_region(cur, base, size, perms, ULMK_REGION_PERIPH);
-		if (rc != ULMK_OK)
-			return (uint32_t)(int32_t)rc;
-
-		/* Immediately apply the new region to PRS 1 DPRs. */
-		ulmk_arch_mpu_switch(cur->regions, cur->region_count,
-				     cur->privilege == ULMK_PRIV_KERNEL ? 0u : 1u);
-		return (uint32_t)base;
+		type = ULMK_REGION_PERIPH;
+	} else if (flags & ULMK_MMAP_SHARED) {
+		type = ULMK_REGION_SHARED;
+	} else if (flags & ULMK_MMAP_ANON) {
+		type   = ULMK_REGION_HEAP;
+		aflags = ULMK_AREA_BACKED;
+	} else {
+		return (uint32_t)(int32_t)ULMK_EINVAL;
 	}
 
-	if (flags & ULMK_MMAP_SHARED) {
-		/*
-		 * Shared physical window (external SDRAM, framebuffer, …).
-		 * Same hint contract as PERIPH, but Normal non-cacheable MPU
-		 * attrs — not Device.  Cap: ULMK_CAP_MAP_SHARED.
-		 */
-		if (hint == 0u)
-			return (uint32_t)(int32_t)ULMK_EINVAL;
-
-		base = (uintptr_t)hint;
-		rc   = thread_add_region(cur, base, size, perms, ULMK_REGION_SHARED);
-		if (rc != ULMK_OK)
-			return (uint32_t)(int32_t)rc;
-
-		ulmk_arch_mpu_switch(cur->regions, cur->region_count,
-				     cur->privilege == ULMK_PRIV_KERNEL ? 0u : 1u);
-		return (uint32_t)base;
-	}
-
-	if (flags & ULMK_MMAP_ANON) {
-		mem = ulmk_heap_alloc(size);
-		if (!mem)
+	if (aflags & ULMK_AREA_BACKED) {
+		/* The block is granule-rounded anyway; let windows use it all. */
+		len  = (len + ULMK_ARCH_REGION_ALIGN - 1u) &
+		       ~(size_t)(ULMK_ARCH_REGION_ALIGN - 1u);
+		base = (uintptr_t)ulmk_heap_alloc(len);
+		if (!base)
 			return (uint32_t)(int32_t)ULMK_ENOMEM;
-
-		base = (uintptr_t)mem;
-		rc   = thread_add_region(cur, base, size, perms, ULMK_REGION_HEAP);
-		if (rc != ULMK_OK) {
-			ulmk_heap_free(mem);
-			return (uint32_t)(int32_t)rc;
-		}
-
-		/* Immediately apply the new region to PRS 1 DPRs. */
-		ulmk_arch_mpu_switch(cur->regions, cur->region_count,
-				     cur->privilege == ULMK_PRIV_KERNEL ? 0u : 1u);
-		return (uint32_t)base;
+	} else {
+		if (hint == 0u)
+			return (uint32_t)(int32_t)ULMK_EINVAL;
+		base = (uintptr_t)hint;
 	}
 
-	return (uint32_t)(int32_t)ULMK_EINVAL;
+	key = ulmk_arch_spin_lock_irqsave(&g_ulmk_lock_area);
+	rc = ulmk_area_insert(&cur->areas, base, len, perms & MEM_PERMS, type,
+			      aflags, NULL, NULL);
+	ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_area, key);
+
+	if (rc != ULMK_OK) {
+		if (aflags & ULMK_AREA_BACKED)
+			ulmk_heap_free((void *)base);
+		return (uint32_t)(int32_t)rc;
+	}
+	return (uint32_t)base;
 }
 
+/*
+ * Dropping an area takes everything derived from it along; for an origin
+ * that includes the backing block once the last grant is gone.
+ */
 uint32_t ulmk_kern_mem_unmap(uint32_t addr, uint32_t size)
 {
 	ulmk_thread_t *cur = ulmk_sched_current();
-	ulmk_arch_region_t *r;
-	uint8_t i;
+	ulmk_arch_irq_key_t key;
+	struct ulmk_area *a;
 
+	(void)size;
 	if (!cur || addr == 0u)
 		return (uint32_t)(int32_t)ULMK_EINVAL;
 
-	for (i = 0u; i < cur->region_count; i++) {
-		r = &cur->regions[i];
-		if ((uint32_t)r->base != addr)
-			continue;
+	key = ulmk_arch_spin_lock_irqsave(&g_ulmk_lock_area);
+	a = ulmk_area_find_base(&cur->areas, (uintptr_t)addr);
+	if (a)
+		ulmk_area_revoke(a);
+	ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_area, key);
+	mem_settle();
 
-		if (r->type == ULMK_REGION_HEAP)
-			ulmk_heap_free((void *)(uintptr_t)addr);
-
-		thread_remove_region(cur, (uintptr_t)addr);
-		ulmk_arch_mpu_switch(cur->regions, cur->region_count,
-				     cur->privilege == ULMK_PRIV_KERNEL ? 0u : 1u);
-		(void)size;
-		return (uint32_t)ULMK_OK;
-	}
-
-	return (uint32_t)(int32_t)ULMK_EINVAL;
+	return a ? (uint32_t)ULMK_OK : (uint32_t)(int32_t)ULMK_EINVAL;
 }
 
 uint32_t ulmk_kern_mem_grant(uint32_t addr, uint32_t size,
-			   uint32_t target_tid, uint32_t perms)
+			     uint32_t target_tid, uint32_t perms)
 {
-	ulmk_thread_t *target;
 	ulmk_thread_t *cur = ulmk_sched_current();
-	ulmk_arch_region_t *r;
-	uint8_t i;
-	int     rc;
+	ulmk_thread_t *target;
+	ulmk_arch_irq_key_t key;
+	struct ulmk_area *a;
+	uint8_t type;
+	int rc;
 
-	if (!cur || addr == 0u || size == 0u)
+	(void)size;
+	if (!cur || addr == 0u)
 		return (uint32_t)(int32_t)ULMK_EINVAL;
 
-	/* Verify caller owns the region being granted */
-	for (i = 0u; i < cur->region_count; i++) {
-		if ((uint32_t)cur->regions[i].base == addr)
-			break;
-	}
-	if (i >= cur->region_count)
-		return (uint32_t)(int32_t)ULMK_EPERM;
-
-	r      = &cur->regions[i];
 	target = ulmk_thread_by_tid((ulmk_tid_t)target_tid);
 	if (!target)
 		return (uint32_t)(int32_t)ULMK_ESRCH;
 
-	/* Grant read-only by default; caller may not grant more perms than held */
-	uint32_t granted_perms = perms & r->perms;
+	key = ulmk_arch_spin_lock_irqsave(&g_ulmk_lock_area);
+	a = ulmk_area_find_base(&cur->areas, (uintptr_t)addr);
+	if (!a) {
+		rc = ULMK_EPERM;
+	} else {
+		/*
+		 * The alias keeps the owner's memory type: an arch that derives
+		 * cacheability from it would otherwise give two views of one
+		 * page different policies.  Heap becomes GRANT only to mark
+		 * that the holder does not own the block.
+		 */
+		type = (a->type == ULMK_REGION_HEAP) ? ULMK_REGION_GRANT :
+						       a->type;
+		rc = ulmk_area_insert(&target->areas, a->base, a->size,
+				      perms & a->perms, type, 0u, a, NULL);
+	}
+	ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_area, key);
 
-	/*
-	 * The alias must carry the owner's memory attributes: an arch that
-	 * derives cacheability from the type would otherwise give the two
-	 * views of one page different policies, and on a core without cache
-	 * coherency each side then reads its own stale copy.  Only heap
-	 * becomes GRANT, so unmapping the alias never frees the owner's block.
-	 */
-	uint8_t granted_type = (r->type == ULMK_REGION_HEAP) ?
-			       ULMK_REGION_GRANT : r->type;
-
-	rc = thread_add_region(target, (uintptr_t)addr, r->size,
-			       granted_perms, granted_type);
-	return (rc == ULMK_OK) ? (uint32_t)ULMK_OK : (uint32_t)(int32_t)rc;
+	return (uint32_t)(int32_t)rc;
 }
 
 uint32_t ulmk_kern_mem_revoke(uint32_t addr, uint32_t target_tid)
 {
-	ulmk_thread_t *target;
 	ulmk_thread_t *cur = ulmk_sched_current();
-	uint8_t i;
-	int rc;
+	ulmk_thread_t *target;
+	ulmk_arch_irq_key_t key;
+	struct ulmk_area *a;
+	struct ulmk_area *t;
+	struct ulmk_area *p;
+	int rc = ULMK_OK;
 
 	if (!cur || addr == 0u)
 		return (uint32_t)(int32_t)ULMK_EINVAL;
-
-	for (i = 0u; i < cur->region_count; i++) {
-		if ((uint32_t)cur->regions[i].base == addr)
-			break;
-	}
-	if (i >= cur->region_count)
-		return (uint32_t)(int32_t)ULMK_EPERM;
 
 	target = ulmk_thread_by_tid((ulmk_tid_t)target_tid);
 	if (!target)
 		return (uint32_t)(int32_t)ULMK_ESRCH;
 
-	/*
-	 * Drop the peer's alias only.  MPU for the peer is refreshed on its
-	 * next sched switch (same lazy path as grant); do not mpu_switch here
-	 * — that would reprogram this CPU's windows for the peer's list.
-	 */
-	rc = thread_remove_region(target, (uintptr_t)addr);
-	return (rc == ULMK_OK) ? (uint32_t)ULMK_OK : (uint32_t)(int32_t)rc;
+	key = ulmk_arch_spin_lock_irqsave(&g_ulmk_lock_area);
+	a = ulmk_area_find_base(&cur->areas, (uintptr_t)addr);
+	t = ulmk_area_find_base(&target->areas, (uintptr_t)addr);
+	if (!a) {
+		rc = ULMK_EPERM;
+	} else if (!t) {
+		rc = ULMK_EINVAL;
+	} else {
+		for (p = t->parent; p && p != a; p = p->parent)
+			;
+		if (p)
+			ulmk_area_revoke(t);
+		else
+			rc = ULMK_EPERM;
+	}
+	ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_area, key);
+	mem_settle();
+
+	return (uint32_t)(int32_t)rc;
 }
 
-/*
- * ulmk_kern_heap_extend — allocate an additional slab from user_pool and
- * add it as a new MPU DPR for the calling thread.
- * Requires the thread to already have a heap (attr.heap_size > 0).
- * Requires ULMK_PRIV_DRIVER (enforced by the syscall router).
- */
-uint32_t ulmk_kern_heap_extend(uint32_t size)
+void ulmk_mem_thread_release(ulmk_thread_t *th)
 {
-	ulmk_thread_t *cur = ulmk_sched_current();
-	void          *mem;
-	int            rc;
+	ulmk_arch_irq_key_t key;
 
-	if (!cur || size == 0u)
-		return (uint32_t)(int32_t)ULMK_EINVAL;
-	if (cur->heap_size == 0u)
-		return (uint32_t)(int32_t)ULMK_EPERM;
+	key = ulmk_arch_spin_lock_irqsave(&g_ulmk_lock_area);
+	ulmk_area_set_release(&th->areas);
+	ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_area, key);
+	mem_settle();
+}
 
-	mem = ulmk_heap_alloc((size_t)size);
-	if (!mem)
-		return (uint32_t)(int32_t)ULMK_ENOMEM;
+int ulmk_mem_thread_inherit(ulmk_thread_t *child, const ulmk_thread_t *parent)
+{
+	ulmk_arch_irq_key_t key;
+	int rc;
 
-	rc = thread_add_region(cur, (uintptr_t)mem, (size_t)size,
-			       ULMK_PERM_READ | ULMK_PERM_WRITE,
-			       ULMK_REGION_HEAP);
-	if (rc != ULMK_OK) {
-		ulmk_heap_free(mem);
-		return (uint32_t)(int32_t)rc;
-	}
-
-	ulmk_arch_mpu_switch(cur->regions, cur->region_count,
-			     cur->privilege == ULMK_PRIV_KERNEL ? 0u : 1u);
-	return (uint32_t)ULMK_OK;
+	key = ulmk_arch_spin_lock_irqsave(&g_ulmk_lock_area);
+	rc = ulmk_area_inherit(&child->areas, &parent->areas);
+	ulmk_arch_spin_unlock_irqrestore(&g_ulmk_lock_area, key);
+	return rc;
 }

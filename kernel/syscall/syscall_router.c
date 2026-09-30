@@ -63,6 +63,8 @@ uint32_t ulmk_syscall_router(uint32_t nr,
 			REQUIRE_CAP(ULMK_CAP_MAP_PERIPH);
 		if (a3 & ULMK_MMAP_SHARED)
 			REQUIRE_CAP(ULMK_CAP_MAP_SHARED);
+		if (a3 & ULMK_MMAP_ANON)
+			REQUIRE_CAP(ULMK_CAP_HEAP);
 		return ulmk_kern_mem_map(a0, a1, a2, a3);
 
 	case ULMK_SYS_MUNMAP:
@@ -101,14 +103,6 @@ uint32_t ulmk_syscall_router(uint32_t nr,
 #else
 		return (uint32_t)(int32_t)ULMK_ENOTSUP;
 #endif
-
-	/* Per-thread heap (slabAO model) */
-	case ULMK_SYS_GET_THREAD_HEAP:
-		return ulmk_kern_get_thread_heap(a0);
-
-	case ULMK_SYS_HEAP_EXTEND:
-		REQUIRE_DRIVER(a0);
-		return ulmk_kern_heap_extend(a0);
 
 	/* ── Scheduling (any privilege) ──────────────────────────────── */
 	case ULMK_SYS_YIELD:
