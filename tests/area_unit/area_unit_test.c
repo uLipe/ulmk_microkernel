@@ -158,6 +158,7 @@ static void test_window_property(void)
 {
 	struct ulmk_area a;
 	ulmk_arch_region_t w;
+	uintptr_t unit;
 	unsigned it;
 	unsigned bad = 0u;
 	unsigned bad_max = 0u;
@@ -168,12 +169,14 @@ static void test_window_property(void)
 	srand(1234);
 	memset(&a, 0, sizeof(a));
 	a.perms = RW;
+	/* Page-granule backends only ever see page-aligned backing blocks. */
+	unit = ULMK_ARCH_MPU_WIN_MIN > 64u ? ULMK_ARCH_MPU_WIN_MIN : 64u;
 
 	for (it = 0u; it < 200000u; it++) {
 		uintptr_t addr;
 
-		a.base = 0x80000000u + (uintptr_t)rnd(1u << 16) * 64u;
-		a.size = (size_t)(1u + rnd(512)) * 64u;
+		a.base = 0x80000000u + (uintptr_t)rnd(1u << 12) * unit;
+		a.size = (size_t)(1u + rnd(512)) * unit;
 		addr   = a.base + rnd((unsigned)a.size);
 
 		if (ulmk_area_window(&a, addr, &w) != ULMK_OK) {
@@ -200,6 +203,11 @@ static void test_window_property(void)
 			if (db >= a.base && db + d <= a.base + a.size)
 				bad_max++;
 		}
+#elif defined(ULMK_ARCH_MPU_WIN_MAX)
+		if (w.size > ULMK_ARCH_MPU_WIN_MAX ||
+		    (a.size <= ULMK_ARCH_MPU_WIN_MAX &&
+		     (w.base != a.base || w.size != a.size)))
+			bad++;
 #else
 		if (w.base != a.base || w.size != a.size)
 			bad++;
@@ -223,6 +231,7 @@ static void test_window_edges(void)
 	a.size = 0x100;
 	CHECK(ulmk_area_window(&a, 0x0FFF, &w) == ULMK_EINVAL, "addr below");
 	CHECK(ulmk_area_window(&a, 0x1100, &w) == ULMK_EINVAL, "addr past");
+#ifndef ULMK_ARCH_MPU_WIN_MAX
 	CHECK(ulmk_area_window(&a, 0x1040, &w) == ULMK_OK &&
 	      w.base == 0x1000 && w.size == 0x100 && w.perms == RW &&
 	      w.type == ULMK_REGION_HEAP, "aligned pow2 area is one window");
@@ -233,6 +242,32 @@ static void test_window_edges(void)
 	CHECK(ulmk_area_window(&a, 0x10C0, &w) == ULMK_OK &&
 	      w.base >= 0x10C0 && w.base + w.size <= 0x1180,
 	      "unaligned block stays inside");
+#else
+	/*
+	 * Page tables: one page per fault.  The HIL-shaped case is a 16 KiB
+	 * malloc touched in its third page and a grant whose base sits 64 B
+	 * into a page (the old 64-byte heap granule).
+	 */
+	a.base = 0x10000;
+	a.size = 0x4000;
+	CHECK(ulmk_area_window(&a, 0x12345, &w) == ULMK_OK &&
+	      w.base == 0x12000 && w.size == ULMK_ARCH_MPU_WIN_MAX &&
+	      w.perms == RW && w.type == ULMK_REGION_HEAP,
+	      "fault loads only its own page");
+	CHECK(ulmk_area_window(&a, 0x13FFF, &w) == ULMK_OK &&
+	      w.base == 0x13000 && w.size == ULMK_ARCH_MPU_WIN_MAX,
+	      "last page of the area");
+
+	a.base = 0x10040;
+	a.size = 0x2000;
+	CHECK(ulmk_area_window(&a, 0x10050, &w) == ULMK_EINVAL,
+	      "partial first page is never mapped");
+	CHECK(ulmk_area_window(&a, 0x11000, &w) == ULMK_OK &&
+	      w.base == 0x11000 && w.size == ULMK_ARCH_MPU_WIN_MAX,
+	      "whole page inside an unaligned area");
+	CHECK(ulmk_area_window(&a, 0x12010, &w) == ULMK_EINVAL,
+	      "partial last page is never mapped");
+#endif
 
 	a.base = 0x1000 + ULMK_ARCH_MPU_WIN_MIN / 2u;
 	a.size = ULMK_ARCH_MPU_WIN_MIN / 2u;

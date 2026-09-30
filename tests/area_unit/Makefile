@@ -21,11 +21,14 @@ SRCS := \
 #   v7m    ARMv7-M PMSAv7        (pow2, 32 B)
 #   v8m    ARMv8-M PMSAv8        (granule, 32 B)
 #   tc     TriCore DPR           (granule, 8 B)
-VARIANTS := napot v7m v8m tc
+#   sv32   RISC-V Sv32 pages     (granule, 4 KiB, one page per fault)
+VARIANTS := napot v7m v8m tc sv32
 napot_DEFS := -DULMK_ARCH_MPU_WIN_POW2=1 -DULMK_ARCH_MPU_WIN_MIN=8u
 v7m_DEFS   := -DULMK_ARCH_MPU_WIN_POW2=1 -DULMK_ARCH_MPU_WIN_MIN=32u
 v8m_DEFS   := -DULMK_ARCH_MPU_WIN_POW2=0 -DULMK_ARCH_MPU_WIN_MIN=32u
 tc_DEFS    := -DULMK_ARCH_MPU_WIN_POW2=0 -DULMK_ARCH_MPU_WIN_MIN=8u
+sv32_DEFS  := -DULMK_ARCH_MPU_WIN_POW2=0 -DULMK_ARCH_MPU_WIN_MIN=4096u \
+              -DULMK_ARCH_MPU_WIN_MAX=4096u
 
 TARGETS := $(patsubst %,area_%_unit_test,$(VARIANTS))
 
