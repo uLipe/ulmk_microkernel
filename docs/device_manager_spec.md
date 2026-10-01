@@ -77,6 +77,16 @@ void ulmk_dev_serve(ulmk_ep_t ep, const struct ulmk_dev_ops *ops, void *ctx);
 
 Wire protocol: request label = `ULMK_DEV_REQ_*` or class ioctl `>= ULMK_DEV_REQ_IOCTL`. Payloads ≤ `ULMK_DEV_INLINE_BYTES` (20) travel inline; larger buffers use `ulmk_mem_grant` to the server tid.
 
+| Direction | Inline payload | Granted buffer |
+|-----------|----------------|----------------|
+| Request (READ/WRITE/SUBMIT/WAIT) | `label \| ULMK_DEV_REQ_F_INLINE`, `words[0]` = length, data in `words[1..5]` | flag clear, `words[0]` = buffer address, `words[1]` = length |
+| Reply | `words[0]` = count \| `ULMK_DEV_F_INLINE << 16`, data in `words[1..]` | `words[0]` = count |
+
+The request flag lives in the label because `words[0]` of a granted request
+is an address and can hold any bit pattern (a heap address with bit 16 set
+used to read as "inline").  Servers dispatch on
+`label & ~ULMK_DEV_REQ_F_INLINE`; class ioctl codes must keep bit 31 clear.
+
 Built-in class for tests only: `ULMK_DEV_CLASS_ECHO`.
 
 ---

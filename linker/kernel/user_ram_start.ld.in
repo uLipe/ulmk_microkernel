@@ -14,10 +14,12 @@
  * aligned power-of-two regions need the user RAM range to start on a boundary
  * of the region that covers it; user_pool.ld.in rounds the end to one of its
  * subregions.  Without it the start is only 8-byte aligned.
+ * ULMK_USER_PAGE_ALIGN (generate_ld.py, MMU builds) puts both ends on a page.
  */
 
     .user_ram_start (NOLOAD) : {
         . = ALIGN(ULMK_USER_RAM_ALIGN ? ULMK_USER_RAM_ALIGN : 1);
+        . = ALIGN(ULMK_USER_PAGE_ALIGN ? ULMK_USER_PAGE_ALIGN : 1);
         _ulmk_user_ram_start = .;
     } > KERNEL_RAM
 

@@ -22,6 +22,7 @@ ARCH_LDFLAGS := -march=rv32imac_zicsr_zifencei -mabi=ilp32
 ARCH_KERNEL_SRCS := \
 	$(ROOT)/arch/riscv/startup.S \
 	$(ROOT)/arch/riscv/arch.c \
+	$(ROOT)/arch/riscv/mpu_pmp.c \
 	$(ROOT)/arch/riscv/smp.c \
 	$(ROOT)/arch/riscv/irq.c \
 	$(ROOT)/arch/riscv/irq_clint.c \

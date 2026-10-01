@@ -439,14 +439,41 @@ def _resolve_board_path(board_arg: str | None) -> tuple[Path, str, list[str]]:
     return board_host, board_container, extra_mounts
 
 
+def _board_list(board: dict, var: str) -> list[str]:
+    val = board.get(var, "")
+    if isinstance(val, list):
+        return val
+    return [val] if val else []
+
+
+def _qemu_cmdline(board: dict, elf: str, smp: bool) -> str:
+    """QEMU invocation for a board; SMP ELFs get the board's extra harts."""
+    arch = _board_arch(board)
+    machine = " ".join(_board_list(board, "UL_BOARD_QEMU_MACHINE"))
+    extra = _board_list(board, "UL_BOARD_QEMU_EXTRA")
+    if smp:
+        extra += _board_list(board, "UL_BOARD_QEMU_SMP_EXTRA")
+    return (f"{_qemu_binary(arch)} -machine {machine} {' '.join(extra)} "
+            f"-kernel {elf} -nographic")
+
+
+def _build_is_smp(build_subdir: str) -> bool:
+    """Whether an existing build dir was configured with SMP on."""
+    cache = BUILD_DIR / build_subdir / "CMakeCache.txt"
+    if not cache.is_file():
+        return False
+    return re.search(r"^ULMK_CONFIG_ENABLE_SMP:\w+=1$", cache.read_text(),
+                     re.MULTILINE) is not None
+
+
 def _build_shell(board_container: str, board: dict,
                  clean: bool, run_qemu: bool,
                  component_flags: list[str], build_subdir: str,
                  optimize_size: bool = False,
-                 enable_smp: bool = False) -> str:
+                 enable_smp: bool = False,
+                 enable_mmu: bool = False) -> str:
     arch = _board_arch(board)
     toolchain = _toolchain_for_arch(arch, board)
-    qemu = _qemu_binary(arch)
 
     lines: list[str] = [
         "set -e",
@@ -469,8 +496,8 @@ def _build_shell(board_container: str, board: dict,
     ]
     if optimize_size:
         cfg.append("    -DULMK_OPTIMIZE_SIZE=ON \\")
-    if enable_smp:
-        cfg.append("    -DULMK_CONFIG_ENABLE_SMP=1 \\")
+    cfg.append(f"    -DULMK_CONFIG_ENABLE_SMP={int(enable_smp)} \\")
+    cfg.append(f"    -DULMK_CONFIG_MMU={int(enable_mmu)} \\")
     for flag in component_flags:
         cfg.append(f"    {flag} \\")
     cfg += [
@@ -488,19 +515,10 @@ def _build_shell(board_container: str, board: dict,
     ]
 
     if run_qemu:
-        machine = board.get("UL_BOARD_QEMU_MACHINE", "")
-        if isinstance(machine, list):
-            machine = machine[0] if machine else ""
-        extra = board.get("UL_BOARD_QEMU_EXTRA", "")
-        if isinstance(extra, list):
-            extra_args = " ".join(extra)
-        else:
-            extra_args = str(extra) if extra else ""
         lines += [
             "",
             "echo '--- running in QEMU (Ctrl-C to stop) ---'",
-            f"{qemu} -machine {machine} {extra_args} \\",
-            f"    -kernel /build/{build_subdir}/ulmk -nographic",
+            _qemu_cmdline(board, f"/build/{build_subdir}/ulmk", enable_smp),
         ]
 
     return "\n".join(lines)
@@ -508,29 +526,19 @@ def _build_shell(board_container: str, board: dict,
 
 def _qemu_only_shell(board: dict, build_subdir: str) -> str:
     """Run an already-built kernel in QEMU without reconfiguring."""
-    arch = _board_arch(board)
-    qemu = _qemu_binary(arch)
-    machine = board.get("UL_BOARD_QEMU_MACHINE", "")
-    if isinstance(machine, list):
-        machine = machine[0] if machine else ""
-    extra = board.get("UL_BOARD_QEMU_EXTRA", "")
-    if isinstance(extra, list):
-        extra_args = " ".join(extra)
-    else:
-        extra_args = str(extra) if extra else ""
-
     return "\n".join([
         "set -e",
         CONTAINER_PATH,
         f"test -f /build/{build_subdir}/ulmk",
         "echo '--- running in QEMU (Ctrl-C to stop) ---'",
-        f"{qemu} -machine {machine} {extra_args} \\",
-        f"    -kernel /build/{build_subdir}/ulmk -nographic",
+        _qemu_cmdline(board, f"/build/{build_subdir}/ulmk",
+                      _build_is_smp(build_subdir)),
     ])
 
 
 def _sdk_build_shell(board_container: str, board: dict, board_name: str,
-                     clean: bool, optimize_size: bool = False) -> str:
+                     clean: bool, optimize_size: bool = False,
+                     enable_mmu: bool = False) -> str:
     """Compile kernel + arch + board into a distributable SDK directory.
 
     Delegates the actual work to tools/sdk_build.sh so the exact build and
@@ -546,6 +554,7 @@ def _sdk_build_shell(board_container: str, board: dict, board_name: str,
 
     clean_flag = " --clean" if clean else ""
     size_flag = " --optimize-size" if optimize_size else ""
+    size_flag += " --enable-mmu" if enable_mmu else ""
     return (
         "set -e\n"
         f"bash /workspace/tools/sdk_build.sh"
@@ -574,7 +583,8 @@ def _run_sdk_build(args: argparse.Namespace) -> None:
 
     shell_cmd = _sdk_build_shell(
         board_container, board, board_name, args.clean,
-        getattr(args, "optimize_size", False))
+        getattr(args, "optimize_size", False),
+        getattr(args, "enable_mmu", False))
 
     cmd = _base_docker_cmd(interactive=False) + [
         "--volume", f"{BUILD_DIR}:/build",
@@ -588,7 +598,8 @@ def _run_sdk_build(args: argparse.Namespace) -> None:
 
 def _run_host_build(board_host: Path, board: dict, build_subdir: str,
                     clean: bool, component_flags: list[str],
-                    enable_smp: bool, optimize_size: bool) -> None:
+                    enable_smp: bool, optimize_size: bool,
+                    enable_mmu: bool = False) -> None:
     """Native host cmake/ninja for boards that need Espressif toolchain."""
     arch = _board_arch(board)
     tc_name = board.get("UL_BOARD_TOOLCHAIN", f"{arch}-gcc")
@@ -626,8 +637,8 @@ def _run_host_build(board_host: Path, board: dict, build_subdir: str,
     ]
     if optimize_size:
         cfg.append("-DULMK_OPTIMIZE_SIZE=ON")
-    if enable_smp:
-        cfg.append("-DULMK_CONFIG_ENABLE_SMP=1")
+    cfg.append(f"-DULMK_CONFIG_ENABLE_SMP={int(enable_smp)}")
+    cfg.append(f"-DULMK_CONFIG_MMU={int(enable_mmu)}")
     cfg.extend(component_flags)
 
     print("--- host configure ---")
@@ -671,6 +682,10 @@ def _run_build(args: argparse.Namespace) -> None:
     enable_smp = bool(getattr(args, "enable_smp", False))
     if "silicon_smp_smoke" in enabled:
         enable_smp = True
+    enable_mmu = bool(getattr(args, "enable_mmu", False))
+    if enable_mmu and board.get("ULMK_BOARD_HAVE_SV32") != "1":
+        sys.exit(f"error: --enable-mmu: {board_host.name} has no MMU backend "
+                 "(ULMK_BOARD_HAVE_SV32 not set in board.cmake)")
 
     host_flag = board.get("UL_BOARD_HOST_BUILD", "0")
     if isinstance(host_flag, list):
@@ -678,7 +693,7 @@ def _run_build(args: argparse.Namespace) -> None:
     if str(host_flag) in ("1", "ON", "TRUE", "true"):
         _run_host_build(
             board_host, board, build_subdir, args.clean, component_flags,
-            enable_smp, getattr(args, "optimize_size", False))
+            enable_smp, getattr(args, "optimize_size", False), enable_mmu)
         return
 
     elf = BUILD_DIR / build_subdir / "ulmk"
@@ -688,7 +703,7 @@ def _run_build(args: argparse.Namespace) -> None:
         shell_cmd = _build_shell(
             board_container, board, args.clean, run_qemu, component_flags,
             build_subdir, getattr(args, "optimize_size", False),
-            enable_smp)
+            enable_smp, enable_mmu)
 
     cmd = _base_docker_cmd(
         interactive=run_qemu and sys.stdout.isatty()) + [
@@ -792,6 +807,8 @@ def _sdk_cache_vars(arch: str, make_extra: str, test_name: str = "") -> str:
     # irq_attach needs ULMK_CONFIG_IRQ_ATTACH=1 (default off).
     if base == "irq_attach":
         tag += "_irqattach"
+    if re.search(r"\bMMU=1\b", make_extra):
+        tag += "_mmu"
     return f"SDK_CACHE=/workspace/tests/sdk_suite/_sdk_cache/{tag}"
 
 
@@ -885,8 +902,141 @@ def _run_all_shell(kind: str, tests: list[str], arch: str,
     return " ; ".join(lines)
 
 
+SILICON_TIMEOUT = 90
+SILICON_SMP_ONLY = frozenset({"silicon_smp_smoke"})
+# icount's cycle counter is one virtual clock shared by every hart: the
+# instructions another hart runs while a syscall is in flight land in its
+# sample, so per-hart WCET is only meaningful on single-hart QEMU.
+SILICON_UP_ONLY = {
+    "silicon_wcet": "QEMU cycle counter is shared across harts",
+}
+# Without icount QEMU's cycle counter follows host time, so a WCET envelope
+# would measure host scheduling noise; icount makes it count instructions.
+SILICON_QEMU_EXTRA = {
+    "silicon_wcet": "-icount shift=0",
+}
+# Cases that need board hardware a QEMU machine does not model.
+SILICON_QEMU_SKIP = {
+    "silicon_device_manager": "no device-manager adapters (board_devices)",
+}
+
+
+def _silicon_cases(board_host: Path) -> list[str]:
+    return [c["name"] for c in _discover_components(board_host)
+            if Path(c["path"]).parent.name == "silicon"]
+
+
+def _silicon_case_shell(name: str, board_container: str, board: dict,
+                        board_host: Path, build_subdir: str,
+                        enable_smp: bool, enable_mmu: bool,
+                        timeout: int) -> str:
+    """Build one silicon case alone and judge it by its console sentinels."""
+    flags = _component_cmake_flags({name}, board_host)
+    if name == "silicon_wcet":
+        flags.append("-DULMK_CONFIG_SYSCALL_WCET=1")
+    build = _build_shell(board_container, board, True, False, flags,
+                         build_subdir, False, enable_smp, enable_mmu)
+    tag = name.upper()
+    log = f"/build/{build_subdir}.{name}.log"
+    qemu = _qemu_cmdline(board, f"/build/{build_subdir}/ulmk", enable_smp)
+    if name in SILICON_QEMU_EXTRA:
+        qemu += f" {SILICON_QEMU_EXTRA[name]}"
+    return (
+        # set -e is inert inside the caller's `if`; a clean build leaves an
+        # ELF only when configure, compile and link all succeeded.
+        f"( {build} ) > /build/{build_subdir}.{name}.build.log 2>&1 ; "
+        f"test -f /build/{build_subdir}/ulmk && "
+        f"python3 /workspace/tests/sdk_suite/qemu_until_sentinels.py "
+        f"--timeout {timeout} --log {log} "
+        f"--sentinel '{tag}: PASS' --fail-sentinel '{tag}: FAIL' -- {qemu} && "
+        f"grep -q '{tag}: PASS' {log} && ! grep -q '{tag}: FAIL' {log}"
+    )
+
+
+def _run_silicon(args: argparse.Namespace) -> None:
+    board_host, board_container, extra_mounts = _resolve_board_path(args.board)
+    board = _parse_board_cmake(board_host)
+    arch = _board_arch(board)
+    enable_smp = bool(getattr(args, "enable_smp", False))
+    enable_mmu = bool(getattr(args, "enable_mmu", False))
+
+    if not board.get("UL_BOARD_QEMU_MACHINE"):
+        sys.exit(f"error: tests silicon: {board_host.name} has no QEMU machine")
+    if enable_mmu and board.get("ULMK_BOARD_HAVE_SV32") != "1":
+        sys.exit(f"error: --enable-mmu: {board_host.name} has no MMU backend "
+                 "(ULMK_BOARD_HAVE_SV32 not set in board.cmake)")
+
+    cases = _silicon_cases(board_host)
+    if not cases:
+        sys.exit("error: no silicon_* components (is ../ulmk_apps present?)")
+    if args.list:
+        print(f"silicon cases ({len(cases)}):")
+        for name in cases:
+            print(f"  {name}")
+        return
+    if args.test:
+        if args.test not in cases:
+            sys.exit(f"error: unknown silicon case '{args.test}'.\n"
+                     f"Available: {', '.join(cases)}")
+        cases = [args.test]
+
+    mode = ("smp" if enable_smp else "up") + ("_mmu" if enable_mmu else "")
+    build_subdir = f"{_build_subdir(arch, board_host.name)}-silicon-{mode}"
+    lines = [CONTAINER_PATH, "FAILED=''", "SKIPPED=''"]
+    for name in cases:
+        why = SILICON_QEMU_SKIP.get(name)
+        if not why and name in SILICON_SMP_ONLY and not enable_smp:
+            why = "needs --enable-smp"
+        if not why and enable_smp:
+            why = SILICON_UP_ONLY.get(name)
+        if why:
+            lines.append(f"echo '--- {name}: SKIP ({why}) ---'; "
+                         f"SKIPPED=\"$SKIPPED {name}\"")
+            continue
+        snippet = _silicon_case_shell(name, board_container, board,
+                                      board_host, build_subdir, enable_smp,
+                                      enable_mmu, args.timeout)
+        rec_ok = _json_record("silicon", name, arch, board_host.name, "PASS")
+        rec_bad = _json_record("silicon", name, arch, board_host.name, "FAIL")
+        lines.append(
+            f"echo '=== {name} [{board_host.name} {mode}] ==='; "
+            f"if ( {snippet} ); then echo '--- {name}: PASS ---'; {rec_ok}; "
+            f"else echo '--- {name}: FAIL ---'; "
+            f"tail -n 40 /build/{build_subdir}.{name}.build.log "
+            f"/build/{build_subdir}.{name}.log 2>/dev/null; "
+            f"FAILED=\"$FAILED {name}\"; {rec_bad}; fi"
+        )
+    lines.append(
+        "[ -n \"$SKIPPED\" ] && echo \"skipped:$SKIPPED\"; "
+        "if [ -z \"$FAILED\" ]; then "
+        "echo; echo '=== ALL TESTS PASSED ==='; "
+        "else echo; echo \"=== FAILED:$FAILED ===\"; exit 1; fi"
+    )
+
+    BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    cmd = _base_docker_cmd(interactive=False) + [
+        "--volume", f"{BUILD_DIR}:/build",
+    ] + extra_mounts + _apps_mount()
+    json_dir = getattr(args, "json_dir", None)
+    if json_dir:
+        Path(json_dir).resolve().mkdir(parents=True, exist_ok=True)
+        cmd += ["--volume", f"{Path(json_dir).resolve()}:/test-results",
+                "-e", "ULMK_TEST_JSON_DIR=/test-results"]
+    cmd += [IMAGE_NAME, "/bin/bash", "-c", " ; ".join(lines)]
+    print(f"Running {len(cases)} silicon case(s) on QEMU "
+          f"[{board_host.name} {mode}]")
+    os.execvp("docker", cmd)
+
+
 def _run_tests(args: argparse.Namespace) -> None:
     kind      = args.kind
+    if kind == "silicon":
+        _killall()
+        _run_silicon(args)
+        return
+    if getattr(args, "enable_smp", False):
+        sys.exit("error: --enable-smp is only valid with 'tests silicon' "
+                 "(e2e uses --include-smp)")
     test_name = args.test
     include_smp = bool(getattr(args, "include_smp", False))
     include_smp4 = bool(getattr(args, "include_smp4", False))
@@ -926,6 +1076,14 @@ def _run_tests(args: argparse.Namespace) -> None:
         make_extra = f"BOARD=boards/{board_host.name}"
         if include_smp4 or board_host.name == "qemu_riscv_virt_smp4":
             make_extra += " SMP_N=4"
+    if getattr(args, "enable_mmu", False):
+        if kind != "e2e":
+            sys.exit("error: --enable-mmu is only valid with 'tests e2e' "
+                     "(unit tests cover both backends on the host)")
+        if _parse_board_cmake(board_host).get("ULMK_BOARD_HAVE_SV32") != "1":
+            sys.exit(f"error: --enable-mmu: {board_host.name} has no MMU "
+                     "backend (ULMK_BOARD_HAVE_SV32 not set in board.cmake)")
+        make_extra = f"{make_extra} MMU=1".strip()
     board_name = board_host.name
     json_arch = "host" if kind == "unit" else arch
     json_board = "" if kind == "unit" else board_name
@@ -1041,6 +1199,8 @@ examples:
   python3 tools/dev.py tests e2e --board boards/qemu_riscv_virt
   python3 tools/dev.py tests e2e --board boards/qemu_riscv_virt --include-smp
   python3 tools/dev.py tests e2e --test sdk_suite/abi_smoke
+  python3 tools/dev.py tests silicon --board boards/qemu_riscv_virt --enable-smp
+  python3 tools/dev.py tests silicon --board boards/qemu_riscv_virt --enable-mmu
   python3 tools/dev.py tests e2e --list
   python3 tools/dev.py tests integ --test sdk_suite/arch_whitebox/ctx_early_tricore
   python3 tools/dev.py killall
@@ -1113,6 +1273,12 @@ examples:
         action="store_true",
         help="Build with ULMK_CONFIG_ENABLE_SMP=1 (requires board NUM_CPU>1)",
     )
+    build_p.add_argument(
+        "--enable-mmu",
+        action="store_true",
+        help="Build with ULMK_CONFIG_MMU=1: page tables instead of the MPU "
+             "(RISC-V Sv32 boards only)",
+    )
 
     build_p.add_argument(
         "--component",
@@ -1181,6 +1347,9 @@ examples:
             "  tests e2e               SDK consumer end-to-end tests (UP)\n"
             "  tests e2e --include-smp RISC-V: UP suite + smp_* cases\n"
             "  tests e2e --include-smp4 RISC-V 4-hart: smp_* + smp4_* only\n"
+            "  tests silicon           ulmk_apps silicon_* cases on QEMU,\n"
+            "                          one ELF per case [--enable-smp]\n"
+            "                          [--enable-mmu] [--case NAME]\n"
             "  tests <kind> --list     show available suites\n"
             "  tests <kind> --test NAME run one suite\n"
             "  tests <kind> --board PATH  select architecture via board"
@@ -1188,7 +1357,7 @@ examples:
     )
     tests_p.add_argument(
         "kind",
-        choices=["unit", "integ", "e2e"],
+        choices=["unit", "integ", "e2e", "silicon"],
         help="Test suite type",
     )
     tests_p.add_argument(
@@ -1198,10 +1367,11 @@ examples:
         help="Board for integ/e2e tests (default: boards/qemu_tc3xx)",
     )
     tests_p.add_argument(
-        "--test",
+        "--test", "--case",
+        dest="test",
         metavar="NAME",
         default=None,
-        help="Run a single test by directory name",
+        help="Run a single test by directory name (silicon: component name)",
     )
     tests_p.add_argument(
         "--list",
@@ -1220,6 +1390,23 @@ examples:
             "e2e only (RISC-V smp4 board): run smp_* + smp4_* only "
             "(no full UP suite)"
         ),
+    )
+    tests_p.add_argument(
+        "--enable-mmu",
+        action="store_true",
+        help="e2e / silicon (RISC-V Sv32 boards): build with "
+             "ULMK_CONFIG_MMU=1",
+    )
+    tests_p.add_argument(
+        "--enable-smp",
+        action="store_true",
+        help="silicon only: build each case with ULMK_CONFIG_ENABLE_SMP=1",
+    )
+    tests_p.add_argument(
+        "--timeout",
+        type=int,
+        default=SILICON_TIMEOUT,
+        help=f"silicon only: seconds per case (default {SILICON_TIMEOUT})",
     )
     tests_p.add_argument(
         "--json-dir",

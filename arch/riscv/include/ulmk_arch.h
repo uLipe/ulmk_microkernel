@@ -115,6 +115,7 @@ bool ulmk_arch_mpu_addr_permitted(uintptr_t addr, size_t size, uint32_t perms);
 bool ulmk_arch_mpu_load(const ulmk_arch_region_t *win);
 void ulmk_arch_mpu_flush(void);
 
+#if !ULMK_CONFIG_MMU
 /*
  * Temporary NAPOT slots (high indices) for boot/config windows
  * (MSPI bring-up, ROM helpers). Map → use → unmap.
@@ -123,6 +124,7 @@ int ulmk_arch_pmp_set_napot(uint8_t slot, uintptr_t base, size_t size,
 			    uint32_t perms);
 int ulmk_arch_pmp_map_temp(uintptr_t base, size_t size, uint32_t perms);
 void ulmk_arch_pmp_unmap_temp(int slot);
+#endif
 
 void ulmk_arch_irq_vectors_init(uintptr_t btv, uintptr_t biv, uintptr_t isp_top);
 void ulmk_arch_irq_src_configure(uint8_t srpn, uint8_t priority, uint8_t cpu_id);

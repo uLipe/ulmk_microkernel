@@ -15,6 +15,7 @@
         . = ALIGN(ULMK_USER_RAM_ALIGN ?
                   MAX(256, (1 << LOG2CEIL(ABSOLUTE(.) - _ulmk_user_ram_start)) / 8) :
                   1);
+        . = ALIGN(ULMK_USER_PAGE_ALIGN ? ULMK_USER_PAGE_ALIGN : 1);
         _ulmk_user_pool_start = .;
         . = ORIGIN(KERNEL_RAM) + LENGTH(KERNEL_RAM);
         _ulmk_user_pool_end = .;

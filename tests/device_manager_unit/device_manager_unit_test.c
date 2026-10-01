@@ -164,13 +164,25 @@ static void test_display_protocol(void)
 		hdr->n_rects = 1u;
 		memcpy(hdr + 1, rects, sizeof(rects));
 		memset(&msg, 0, sizeof(msg));
-		msg.label = ULMK_DEV_REQ_WRITE;
-		msg.words[0] = (uint32_t)need | (ULMK_DEV_F_INLINE << 16);
+		msg.label = ULMK_DEV_REQ_WRITE | ULMK_DEV_REQ_F_INLINE;
+		msg.words[0] = (uint32_t)need;
 		memcpy(&msg.words[1], payload, need);
 		CHECK(proto_disp_handle(&msg) == ULMK_OK, "disp write present");
 		CHECK(proto_disp_last_present() == 0x1000u, "present fb");
 		CHECK(proto_disp_last_n_rects() == 1u, "present n_rects");
 	}
+
+	/*
+	 * Granted write whose buffer address has bit 16 set (the ANON block
+	 * the Sv32 e2e run got at 0x80054000): words[0] is an address, not
+	 * len | INLINE << 16, and must not be decoded as an inline present.
+	 */
+	memset(&msg, 0, sizeof(msg));
+	msg.label = ULMK_DEV_REQ_WRITE;
+	msg.words[0] = 0x80054000u;
+	msg.words[1] = 48u;
+	CHECK(proto_disp_handle(&msg) == ULMK_EINVAL,
+	      "grant write with bit 16 in the address is not inline");
 
 	memset(&msg, 0, sizeof(msg));
 	msg.label = ULMK_DEV_REQ_READ;

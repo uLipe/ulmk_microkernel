@@ -11,6 +11,7 @@
 #define ULMK_ARCH_RISCV_CONFIG_H
 
 #include <ulmk/platform.h>
+#include <ulmk/config.h>
 
 #ifndef ULMK_ARCH_NUM_CPU
 #define ULMK_ARCH_NUM_CPU	1
@@ -38,11 +39,36 @@
 #endif
 
 #define ULMK_ARCH_MAX_REGIONS	12
+
+#if ULMK_CONFIG_MMU
+/*
+ * Sv32 protects in 4 KiB leaves, so every user region starts and ends on a
+ * page and a lazy window is exactly one page.
+ */
+#define ULMK_ARCH_REGION_ALIGN	4096
+#define ULMK_ARCH_MPU_WIN_POW2	0
+#define ULMK_ARCH_MPU_WIN_MIN	4096u
+#define ULMK_ARCH_MPU_WIN_MAX	4096u
+
+/*
+ * Per-hart level-2 tables (4 KiB each), shared by the static user map and
+ * the pages mapped on demand; one table covers a 4 MiB stretch.
+ */
+#ifndef ULMK_ARCH_SV32_L2_NUM
+#define ULMK_ARCH_SV32_L2_NUM	2
+#endif
+
+/* On-demand pages a hart keeps live before recycling the oldest. */
+#ifndef ULMK_ARCH_SV32_DYN_MAX
+#define ULMK_ARCH_SV32_DYN_MAX	32
+#endif
+#else
 #define ULMK_ARCH_REGION_ALIGN	64
 
 /* Lazy windows are single NAPOT entries (TOR would cost two slots). */
 #define ULMK_ARCH_MPU_WIN_POW2	1
 #define ULMK_ARCH_MPU_WIN_MIN	8u
+#endif
 
 /*
  * Slot map.  Boards override when boot firmware locks slots: a write to a

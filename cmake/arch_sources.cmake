@@ -1,4 +1,7 @@
-# cmake/arch_sources.cmake — arch-specific source lists (included after arch.cmake).
+# cmake/arch_sources.cmake — arch-specific source lists (included after
+# config.cmake: the memory-protection backend follows ULMK_CONFIG_MMU).
+
+set(ULMK_ARCH_PAGE_ALIGN 0)
 
 if(ULMK_ARCH STREQUAL "tricore")
 	set(ULMK_ARCH_KERNEL_SOURCES
@@ -11,8 +14,15 @@ if(ULMK_ARCH STREQUAL "tricore")
 		${ULMK_ARCH_DIR}/secondary.S
 		${ULMK_ARCH_DIR}/vectors.S)
 elseif(ULMK_ARCH STREQUAL "riscv")
+	if("${ULMK_CONFIG_MMU}" STREQUAL "1")
+		set(_ulmk_riscv_prot ${ULMK_ARCH_DIR}/mmu_sv32.c)
+		set(ULMK_ARCH_PAGE_ALIGN 4096)
+	else()
+		set(_ulmk_riscv_prot ${ULMK_ARCH_DIR}/mpu_pmp.c)
+	endif()
 	set(ULMK_ARCH_KERNEL_SOURCES
 		${ULMK_ARCH_DIR}/arch.c
+		${_ulmk_riscv_prot}
 		${ULMK_ARCH_DIR}/smp.c
 		${ULMK_ARCH_DIR}/irq.c
 		${ULMK_ARCH_DIR}/irq_clint.c

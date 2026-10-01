@@ -151,7 +151,8 @@ uint32_t ulmk_kern_mem_map(uint32_t hint, uint32_t size,
 		/* The block is granule-rounded anyway; let windows use it all. */
 		len  = (len + ULMK_ARCH_REGION_ALIGN - 1u) &
 		       ~(size_t)(ULMK_ARCH_REGION_ALIGN - 1u);
-		base = (uintptr_t)ulmk_heap_alloc(len);
+		base = (uintptr_t)ulmk_heap_aligned_alloc(ULMK_ARCH_REGION_ALIGN,
+							  len);
 		if (!base)
 			return (uint32_t)(int32_t)ULMK_ENOMEM;
 	} else {

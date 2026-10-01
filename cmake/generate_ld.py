@@ -73,6 +73,10 @@ def main():
                     metavar="NAME")
     ap.add_argument("--domain",     action="append", default=[],
                     metavar="NAME:REGION")
+    ap.add_argument("--page-align", type=lambda v: int(v, 0), default=0,
+                    metavar="BYTES",
+                    help="page size of an MMU backend: user text/RAM bounds "
+                         "land on page boundaries (0 = no MMU)")
     args = ap.parse_args()
 
     out = []
@@ -91,6 +95,9 @@ def main():
     for knob in ("ULMK_USER_TEXT_ALIGN", "ULMK_USER_RAM_ALIGN"):
         if not re.search(rf"^\s*{knob}\s*=", chip_memory, re.MULTILINE):
             out.append(f"{knob} = 0;\n")
+    # Page tables map whole pages: a user bound inside a page would hand the
+    # kernel bytes on the other side of it to userspace.
+    out.append(f"ULMK_USER_PAGE_ALIGN = {args.page_align};\n")
 
     out.append("\nSECTIONS {\n")
 
@@ -133,6 +140,8 @@ def main():
         "    .user_text_start : {\n"
         "        . = ALIGN(ULMK_USER_TEXT_ALIGN ? "
         "ULMK_USER_TEXT_ALIGN : 1);\n"
+        "        . = ALIGN(ULMK_USER_PAGE_ALIGN ? "
+        "ULMK_USER_PAGE_ALIGN : 1);\n"
         "        _ulmk_user_text_start = .;\n"
         "    } > KERNEL_FLASH\n")
 

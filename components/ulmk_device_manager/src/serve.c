@@ -1,14 +1,10 @@
 /* SPDX-License-Identifier: MIT */
+#include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
 #include "device_internal.h"
 
 #ifndef UL_UNIT_TEST
-
-static int is_inline_w0(uint32_t w0)
-{
-	return ((w0 >> 16) & ULMK_DEV_F_INLINE) != 0u;
-}
 
 static void pack_inline_reply(ulmk_msg_t *reply, const void *buf, size_t len)
 {
@@ -52,6 +48,8 @@ void ulmk_dev_serve(ulmk_ep_t ep, const struct ulmk_dev_ops *ops, void *ctx)
 	void *buf;
 	uint32_t args[6];
 	uint32_t i;
+	uint32_t op;
+	bool inl;
 
 	if (ep == ULMK_EP_INVALID || !ops)
 		return;
@@ -65,7 +63,10 @@ void ulmk_dev_serve(ulmk_ep_t ep, const struct ulmk_dev_ops *ops, void *ctx)
 			reply.words[i] = 0u;
 		reply.words[0] = (uint32_t)(int32_t)ULMK_EINVAL;
 
-		switch (msg.label) {
+		op = msg.label & ~ULMK_DEV_REQ_F_INLINE;
+		inl = (msg.label & ULMK_DEV_REQ_F_INLINE) != 0u;
+
+		switch (op) {
 		case ULMK_DEV_REQ_OPEN:
 			rc = ops->open ? ops->open(ctx) : ULMK_ENOTSUP;
 			reply.words[0] = (uint32_t)(int32_t)rc;
@@ -81,7 +82,7 @@ void ulmk_dev_serve(ulmk_ep_t ep, const struct ulmk_dev_ops *ops, void *ctx)
 				reply.words[0] = (uint32_t)(int32_t)ULMK_ENOTSUP;
 				break;
 			}
-			if (is_inline_w0(msg.words[0])) {
+			if (inl) {
 				len = msg.words[0] & 0xFFFFu;
 				if (len > ULMK_DEV_INLINE_BYTES)
 					len = ULMK_DEV_INLINE_BYTES;
@@ -101,7 +102,7 @@ void ulmk_dev_serve(ulmk_ep_t ep, const struct ulmk_dev_ops *ops, void *ctx)
 				reply.words[0] = (uint32_t)(int32_t)ULMK_ENOTSUP;
 				break;
 			}
-			if (is_inline_w0(msg.words[0])) {
+			if (inl) {
 				len = msg.words[0] & 0xFFFFu;
 				if (len > ULMK_DEV_INLINE_BYTES)
 					len = ULMK_DEV_INLINE_BYTES;
@@ -138,7 +139,7 @@ void ulmk_dev_serve(ulmk_ep_t ep, const struct ulmk_dev_ops *ops, void *ctx)
 				reply.words[0] = (uint32_t)(int32_t)ULMK_ENOTSUP;
 				break;
 			}
-			if (is_inline_w0(msg.words[0])) {
+			if (inl) {
 				len = msg.words[0] & 0xFFFFu;
 				if (len > ULMK_DEV_INLINE_BYTES)
 					len = ULMK_DEV_INLINE_BYTES;
@@ -162,7 +163,7 @@ void ulmk_dev_serve(ulmk_ep_t ep, const struct ulmk_dev_ops *ops, void *ctx)
 			if (msg.words[0] == 0u) {
 				rc = ops->wait(ctx, NULL, 0u);
 				reply.words[0] = (uint32_t)(int32_t)rc;
-			} else if (is_inline_w0(msg.words[0])) {
+			} else if (inl) {
 				len = msg.words[0] & 0xFFFFu;
 				if (len > ULMK_DEV_INLINE_BYTES)
 					len = ULMK_DEV_INLINE_BYTES;
@@ -187,13 +188,13 @@ void ulmk_dev_serve(ulmk_ep_t ep, const struct ulmk_dev_ops *ops, void *ctx)
 			 * (client sets msg.label = req).  Handler fills
 			 * args[0]=rc and optional out args.
 			 */
-			if (msg.label < ULMK_DEV_REQ_IOCTL || !ops->ioctl) {
+			if (op < ULMK_DEV_REQ_IOCTL || !ops->ioctl) {
 				reply.words[0] = (uint32_t)(int32_t)ULMK_ENOTSUP;
 				break;
 			}
 			for (i = 0u; i < 6u; i++)
 				args[i] = msg.words[i];
-			rc = ops->ioctl(ctx, msg.label, args, 6u);
+			rc = ops->ioctl(ctx, op, args, 6u);
 			for (i = 0u; i < 6u; i++)
 				reply.words[i] = args[i];
 			if (rc != ULMK_OK)

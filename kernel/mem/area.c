@@ -261,6 +261,17 @@ int ulmk_area_window(const struct ulmk_area *a, uintptr_t addr,
 	nb = (lo + a->size) & ~(uintptr_t)(ULMK_ARCH_MPU_WIN_MIN - 1u);
 	if (addr < b || addr >= nb)
 		return ULMK_EINVAL;
+#ifdef ULMK_ARCH_MPU_WIN_MAX
+	/*
+	 * A window costs the arch per granule it covers, so one fault loads
+	 * only the stretch around @addr; the rest faults in on first touch.
+	 */
+	if (nb - b > ULMK_ARCH_MPU_WIN_MAX) {
+		b = addr & ~(uintptr_t)(ULMK_ARCH_MPU_WIN_MIN - 1u);
+		if (nb - b > ULMK_ARCH_MPU_WIN_MAX)
+			nb = b + ULMK_ARCH_MPU_WIN_MAX;
+	}
+#endif
 	s = nb - b;
 #endif
 

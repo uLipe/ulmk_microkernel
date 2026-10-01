@@ -280,7 +280,7 @@ static void *stack_alloc(size_t *size)
 #else
 	*size = (*size + ULMK_ARCH_REGION_ALIGN - 1u) &
 		~(size_t)(ULMK_ARCH_REGION_ALIGN - 1u);
-	return ulmk_heap_alloc(*size);
+	return ulmk_heap_aligned_alloc(ULMK_ARCH_REGION_ALIGN, *size);
 #endif
 }
 

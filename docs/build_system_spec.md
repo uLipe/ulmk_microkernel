@@ -441,8 +441,29 @@ so there are no static-pool size knobs for them.
 │ ULMK_CONFIG_DEBUG_PRINTK           │ 1        │ Kernel printk (0 = no-op)          │
 │ ULMK_CONFIG_IRQ_ATTACH             │ 0        │ ulmk_irq_attach (1=DANGEROUS ISR   │
 │                                    │          │ userspace callbacks; else ENOTSUP) │
+│ ULMK_CONFIG_MMU                    │ 0        │ User memory protection backend:    │
+│                                    │          │ 0=MPU (PMP/DPR/MPU), 1=MMU page    │
+│                                    │          │ tables (RISC-V Sv32 only)          │
 └──────────────────────────────────┴──────────┴────────────────────────────────────┘
 ```
+
+`ULMK_CONFIG_MMU=1` is a configure-time error unless the arch is RISC-V and
+the board's `board.cmake` sets `ULMK_BOARD_HAVE_SV32 1`; it also refuses
+`ULMK_CONFIG_BOARD_PMP_EXTRA=1`, whose board PMP entries need the MPU backend.
+With it on, `cmake/arch_sources.cmake` compiles `arch/riscv/mmu_sv32.c`
+instead of `mpu_pmp.c`, and `generate_ld.py --page-align 4096` aligns the user
+sections (`ULMK_USER_PAGE_ALIGN`) so the static map is whole pages.  From
+`tools/dev.py`:
+
+```bash
+python3 tools/dev.py build --board boards/qemu_riscv_virt --enable-mmu
+python3 tools/dev.py tests e2e --board boards/qemu_riscv_virt --enable-mmu
+python3 tools/dev.py tests silicon --board boards/qemu_riscv_virt --enable-mmu
+python3 tools/dev.py build --kernel --board boards/qemu_riscv_virt --enable-mmu
+```
+
+The SDK cache key gets an `_mmu` suffix, so PMP and Sv32 SDK builds do not
+overwrite each other (`tools/sdk_build.sh --enable-mmu`, `sdk_case.mk MMU=1`).
 
 Canonical defaults and range validation live in **`tools/gen_config.py`** — the
 single generator shared by the CMake build and the integration-test Makefiles.
